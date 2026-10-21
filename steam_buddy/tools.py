@@ -457,8 +457,9 @@ class SteamTools:
         ]
         return {
             "games": out,
-            "note": "Games with 5+ hours you haven't played in 90+ days and didn't finish, those with developer "
-                    "updates since you stopped first. more_updates means there were more posts than were checked.",
+            "note": "Games with 5+ hours you haven't played in 90+ days and didn't finish. Those with a recent big "
+                    "update (big_update: new content, an expansion or a named patch, judged by title) come first, "
+                    "then any update, then hours. more_updates means there were more posts than were checked.",
         }
 
     def get_wishlist(self, max_items: Any = None) -> dict[str, Any]:

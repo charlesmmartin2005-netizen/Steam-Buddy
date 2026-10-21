@@ -113,8 +113,12 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
      cached.
    - "Worth going back to": games with 5+ hours, untouched for 90+ days and not
      finished (likely abandoned, live-service games you stopped, or dormant top
-     games). The eight with the most hours get their news checked, and those with
-     developer updates since you last played come first.
+     games). The eight with the most hours get their news checked. Ranked by
+     the newest *big* update since you last played (a named update, expansion,
+     season, new content or patch, judged by title; not previews, hotfixes or
+     soundtracks): its pull halves every 30 days, times 1 + ln(hours / 5), so
+     a fresh update to a 130-hour game beats a month-old one to a 300-hour
+     game. Then games with any update, then hours.
    - `--digest` builds the digest without calling Claude, so it's free, takes
      seconds once the cache is warm, and is safe to schedule: three picks from
      `recommend_games`, two hidden gems that aren't among them, up to two posts
