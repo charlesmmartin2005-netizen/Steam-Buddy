@@ -102,11 +102,23 @@ def test_because_you_played_gets_art_for_owned_games():
     assert "art" not in home_payload(digest(), None)["picks"][0]["because_you_played"][0]
 
 
-def test_owned_appids_reads_the_profile_lists():
+def test_owned_appids_covers_the_whole_library():
     g = lambda appid, name: SimpleNamespace(appid=appid, name=name)
-    prof = SimpleNamespace(most_played=[g(1, "A")], active=[g(2, "B")], completed=[], abandoned=[g(1, "A")],
-                           stopped_endless=[], bounced=[], unplayed=[g(3, "C")])
-    assert owned_appids(prof) == {"A": 1, "B": 2, "C": 3}
+    assert owned_appids([g(1, "A"), g(2, "B"), g(1, "A")]) == {"A": 1, "B": 2}
+
+
+def test_home_cites_art_for_an_owned_game_the_profile_doesnt_list(monkeypatch):
+    # Risk of Rain 2 sits mid-library: not most played, not recent, not finished or abandoned.
+    owned = [SimpleNamespace(appid=632360, name="Risk of Rain 2"), SimpleNamespace(appid=42, name="Rogue Runner")]
+    d = digest(picks=[{**pick(1, "Pick One"), "because_you_played": [
+        {"game": "Risk of Rain 2", "hours": 39.2, "shared_tags": ["Action Roguelike"]}]}])
+    client = SimpleNamespace(get_owned_games=lambda: owned)
+    tools = SimpleNamespace(client=client, get_wishlist=lambda: {"items": []})
+    app = App(SimpleNamespace(anthropic_api_key=None), tools)
+    monkeypatch.setattr("steam_buddy.web.build_digest", lambda t: d)
+    data = app.home()
+    because = data["picks"][0]["because_you_played"][0]
+    assert because["art"]["capsule"].endswith("/632360/library_600x900.jpg")
 
 
 def test_home_payload_handles_empty_sections():

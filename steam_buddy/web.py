@@ -95,12 +95,11 @@ def _game(g: dict[str, Any], find_art: ArtLookup, owned: dict[str, int]) -> dict
             "store_url": f"https://store.steampowered.com/app/{g['appid']}/"}
 
 
-def owned_appids(profile: Any) -> dict[str, int]:
-    """Name → appid for the games the taste profile lists, which are the ones recommendations cite."""
+def owned_appids(games: list[Any]) -> dict[str, int]:
+    """Name → appid for every game you own, so any game a recommendation cites gets its art."""
     out: dict[str, int] = {}
-    for field_name in ("most_played", "active", "completed", "abandoned", "stopped_endless", "bounced", "unplayed"):
-        for g in getattr(profile, field_name, None) or []:
-            out.setdefault(g.name, g.appid)
+    for g in games:
+        out.setdefault(g.name, g.appid)
     return out
 
 
@@ -164,7 +163,10 @@ class App:
                 wishlist = self.tools.get_wishlist()
             except (SteamAPIError, ValueError):
                 wishlist = None
-            owned = owned_appids(self.tools.profile())
+            try:
+                owned = owned_appids(self.tools.client.get_owned_games())
+            except SteamAPIError:
+                owned = {}
             self._home, self._home_at = home_payload(d, wishlist, self.find_art, owned), time.time()
         return self._home
 
