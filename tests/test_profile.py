@@ -76,7 +76,7 @@ def test_status_classification(profile):
     assert names(profile.abandoned) == {"Grand Open RPG"}
     # No achievement data means no verdict, and the profile says so.
     assert "Wild Survival" not in names(profile.completed + profile.abandoned)
-    assert any("no achievement data" in n for n in profile.notes)
+    assert any("No achievement data for 2 games" in n for n in profile.notes)
 
 
 def test_recent_trends(profile):
@@ -147,7 +147,7 @@ def test_gather_skips_unplayed_and_notes_failures():
     gathered = gather(client, now=data.now, progress=lambda stage, i, n: seen.append(stage))
     assert 8 not in client.tag_calls  # never played: no need to fetch tags
     assert gathered.achievements[1] is None
-    assert any("achievements for 1 games" in n and "boom" in n for n in gathered.notes)
+    assert any("achievements for 1 game." in n and "boom" in n for n in gathered.notes)
     assert {"tags", "achievements"} <= set(seen)
 
 
@@ -194,3 +194,45 @@ def test_gather_explains_private_achievements_and_stops_asking():
     assert not any("Couldn't read" in n for n in gathered.notes)
     # One clear explanation, not a second vaguer note about missing data.
     assert not any("no achievement data" in n for n in build_profile(gathered).notes)
+
+
+def test_few_achievements_and_live_service_games_get_no_verdict():
+    now = 1_800_000_000
+    old = now - 200 * DAY
+    games = [
+        OwnedGame(1, "One-Achievement Shooter", 100, 0, old),
+        OwnedGame(2, "Hero Brawl Online", 7_500, 0, old),
+        OwnedGame(3, "Story Game", 600, 0, old),
+    ]
+    tags = {
+        1: TagInfo(1, {"FPS": 10}, "steamspy"),
+        2: TagInfo(2, {"Hero Shooter": 10, "PvP": 8}, "steamspy"),
+        3: TagInfo(3, {"Story Rich": 10}, "steamspy"),
+    }
+    achievements = {
+        1: AchievementProgress(1, unlocked=1, total=1),
+        2: AchievementProgress(2, unlocked=5, total=40),
+        3: AchievementProgress(3, unlocked=1, total=20),
+    }
+    p = build_profile(LibraryData(games, tags, achievements, now))
+    assert names(p.completed) == set()  # 1/1 achievements isn't "finished"
+    assert names(p.abandoned) == {"Story Game"}
+    assert names(p.stopped_endless) == {"Hero Brawl Online"}
+    assert not any(" 1 games" in n for n in p.notes)
+
+
+def test_bounced_tags_leave_out_tags_you_play_a_lot():
+    now = 1_800_000_000
+    old = now - 200 * DAY
+    games = [
+        OwnedGame(1, "Big Strategy", 30_000, 0, old),
+        OwnedGame(2, "Dull Strategy", 20, 0, old),
+        OwnedGame(3, "Spooky Strategy", 30, 0, old),
+    ]
+    tags = {
+        1: TagInfo(1, {"Strategy": 10}, "steamspy"),
+        2: TagInfo(2, {"Strategy": 10, "Horror": 5}, "steamspy"),
+        3: TagInfo(3, {"Strategy": 10, "Horror": 5}, "steamspy"),
+    }
+    p = build_profile(LibraryData(games, tags, {}, now))
+    assert p.bounced_tags == ["Horror"]

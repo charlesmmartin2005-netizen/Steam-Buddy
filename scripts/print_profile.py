@@ -99,6 +99,10 @@ def render(p: TasteProfile) -> None:
     if not p.abandoned:
         console.print("  none found")
 
+    if p.stopped_endless:
+        console.print("\n[bold]Live-service games you've stopped playing[/] (no ending, so no verdict)")
+        console.print(f"  {_names(p.stopped_endless)}")
+
     console.print("\n[bold]Bounced off[/] (played under an hour)")
     console.print(f"  {_names(p.bounced, 12)}")
     if p.bounced_tags:

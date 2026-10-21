@@ -23,10 +23,11 @@ steam-buddy/
 │   ├── agent.py            # Phase 4: tool-use loop + system prompt
 │   └── main.py             # CLI entry: `steam-buddy`, `--check`, `--digest`
 ├── scripts/
-│   └── print_library.py    # Phase 2: library sorted by playtime
+│   ├── print_library.py    # Phase 2: library sorted by playtime
+│   └── print_profile.py    # Phase 3: taste profile
 └── tests/
     ├── fixtures/           # fake library for profile tests
-    └── test_config.py
+    └── test_*.py           # config, cache, client, profile, tools, agent
 ```
 
 The modules live in a `steam_buddy/` package rather than at the top level, mainly
@@ -57,8 +58,22 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
    - Session style: Steam doesn't report sessions, so it's inferred from how much
      play is in short-run genres (roguelikes, card games) vs long-session ones
      (open-world RPGs, survival, sims).
-4. **Tools + agent + CLI chat**: tool schemas, Claude tool-use loop, system prompt
-   that grounds every recommendation in data and never suggests owned games.
+4. **Tools + agent + CLI chat** (done):
+   - `tools.py`: ten tools (library summary, taste profile, recently played, game
+     details, store search, similar games, hidden gems, news, wishlist, backlog).
+     Every argument is validated in code, and failures go back to Claude as tool
+     errors instead of crashing the chat. Discovery tools drop owned games before
+     Claude sees them; search results carry an `owned` flag.
+   - Similar games and hidden gems come from SteamSpy's per-tag game lists (cached
+     a week), ranked by how many of the requested tags match and then by the lower
+     bound of the positive-review rate, so 95% of 10,000 reviews beats 100% of 12.
+     Tags are looked up under the spelling your own library uses.
+   - `agent.py`: streaming tool-use loop on `claude-opus-5-5` at `medium` effort.
+     The history is append-only (Claude's thinking stays valid across turns and the
+     prompt cache keeps hitting); a turn that fails, is declined or is interrupted is
+     removed whole. Server-side fallback (`fallbacks: "default"`) retries a mistaken
+     safety decline on another model. At most 15 tool rounds per question.
+   - `main.py`: the chat REPL with `/reset`, `/help`, `/quit` and `--refresh`.
 5. **Hidden gems + recommendation quality**: high positive %, low review count,
    tag match scoring; filter owned games.
 6. **News + weekly digest**: `--digest` prints 3 recs, 2 gems, news for recent
@@ -78,6 +93,9 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
 | Store details | `store.steampowered.com/api/appdetails` | no | about 200 requests per 5 min; we space them 1.5s apart |
 | Reviews | `IUserReviewsService/GetAppReviews/v1` | no | replaces the deprecated `store.steampowered.com/appreviews`, which we keep as a fallback |
 | Tags | `steamspy.com/api.php?request=appdetails` | no | 1 request/second; falls back to store genres + categories |
+| Games by tag | `steamspy.com/api.php?request=tag&tag=X` | no | every game with that tag, with review counts and price; about 150 KB per tag |
+| Store search | `store.steampowered.com/api/storesearch/` | no | matches titles only; price often missing |
+| Prices | `store.steampowered.com/api/appdetails?filters=price_overview` | no | the one filter that accepts many app ids per request; cached 6 hours |
 
 The API key travels as a query parameter, so the client never puts request URLs
 in error messages, drops exception chains that could carry them, and turns off
@@ -85,7 +103,9 @@ httpx's own request logging.
 
 ## Defaults chosen (change any of these)
 
-- HTTP: `httpx` (sync) instead of `requests`, since `anthropic` already depends on it.
-- Claude model: `claude-sonnet-5-5` by default, overridable via `ANTHROPIC_MODEL`
-  in `.env`. Good quality for chat at a lower cost than Opus.
+- HTTP: `httpx` (sync) instead of `requests`.
+- Claude model: `claude-opus-5-5` at `medium` effort, overridable with
+  `ANTHROPIC_MODEL` and `ANTHROPIC_EFFORT` in `.env`.
+- Prices are cached for 6 hours rather than a week like other store data, so
+  sale answers aren't stale.
 - Cache location: `~/.cache/steam-buddy/cache.sqlite3` (override with `STEAM_BUDDY_CACHE`).

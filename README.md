@@ -6,13 +6,13 @@ on news for the games you care about, and answers questions like "what should I
 play tonight?". It's a Python CLI that chats with Claude, and Claude uses tools
 backed by your real Steam data.
 
-> Status: **Phase 3 (taste profile)**. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+> Status: **Phase 4 (chat agent)**. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Requirements
 
 - Python 3.11 or newer
 - A Steam account with a Steam Web API key
-- An Anthropic API key (needed from Phase 4, the chat agent)
+- An Anthropic API key (for the chat agent)
 
 ## Install
 
@@ -79,8 +79,14 @@ Changes can take a few minutes to reach the API.
 ## 4. Anthropic API key (for the chat agent)
 
 Create a key at <https://console.anthropic.com/settings/keys> and put it in
-`.env` as `ANTHROPIC_API_KEY=...`. You can set `ANTHROPIC_MODEL` to pick a
-different Claude model (default `claude-sonnet-5-5`).
+`.env` as `ANTHROPIC_API_KEY=...`.
+
+Two optional settings:
+
+- `ANTHROPIC_MODEL` picks the Claude model (default `claude-opus-5-5`).
+- `ANTHROPIC_EFFORT` sets how hard Claude thinks before answering: `low`,
+  `medium` (default), `high`, `xhigh` or `max`. Lower is faster and cheaper;
+  try `low` if answers feel slow.
 
 ## 5. Check that Steam Buddy can see your library
 
@@ -113,6 +119,34 @@ bounced off (under an hour), and never played.
 The first run fetches tags and achievements for every game you've played, so it
 takes a minute or two (SteamSpy allows one request per second). After that it
 comes from the cache.
+
+## 7. Chat
+
+```bash
+python -m steam_buddy.main            # or: steam-buddy, after pip install -e .
+python -m steam_buddy.main --refresh  # re-fetch your library, wishlist and prices first
+```
+
+Ask things like:
+
+- what should I play tonight?
+- what in my backlog fits a 2-hour session?
+- what have I abandoned that's worth going back to?
+- what's on sale from my wishlist?
+- find me hidden gems like my favourite roguelikes
+
+While Claude works you'll see a line for each lookup it makes ("Checking your
+wishlist and prices"). Type `/reset` to start a new conversation, `/help` for
+examples, and `/quit` (or Ctrl+D) to leave. Ctrl+C stops the current answer.
+
+Claude only sees your data through tools, and it's told to back every
+recommendation with your hours and tags, never to suggest a game you already
+own, and to say plainly when data is missing (for example, games without
+achievements). Steam doesn't record session length, so "fits a 2-hour session"
+is judged from genre tags, and Claude will say so.
+
+If Claude's safety checks decline a question by mistake, the API retries it on
+another Claude model automatically, and the chat notes when that happens.
 
 ## Running tests
 
