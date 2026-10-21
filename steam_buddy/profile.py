@@ -38,6 +38,7 @@ ACTIVE_DAYS = 30  # last played within this many days: still playing
 DORMANT_DAYS = 90  # not played for this long: finished, abandoned, or resting
 COMPLETED_PCT = 70  # achievements unlocked at or above this: likely finished
 ABANDONED_PCT = 30  # dormant and below this: likely abandoned
+MIN_ACHIEVEMENTS = 5  # fewer than this and the percentage says little (CS2 has 1)
 RECENT_DAYS = 60  # window for "recent trends"
 TAGS_PER_GAME = 10  # only a game's strongest tags count toward your profile
 PRIVATE_STOP_AFTER = 5  # this many "profile is not public" answers in a row: stop asking
@@ -61,6 +62,12 @@ SOFTWARE_TAGS = {
     "Game Development", "Software Training", "Benchmark",
 }
 
+# Live-service and competitive games have no ending to finish or abandon.
+ENDLESS_TAGS = {
+    "PvP", "Massively Multiplayer", "MMORPG", "MMO", "Battle Royale", "Hero Shooter",
+    "Competitive", "eSports", "Extraction Shooter", "Live Service", "MOBA",
+}
+
 # Genre tags that suggest short, repeatable runs vs long sit-down sessions.
 SHORT_SESSION_TAGS = {
     "Roguelike", "Roguelite", "Action Roguelike", "Roguelike Deckbuilder", "Arcade",
@@ -75,6 +82,7 @@ LONG_SESSION_TAGS = {
 }
 
 _NON_DESCRIPTIVE = {tag_key(t) for t in NON_DESCRIPTIVE_TAGS}
+_ENDLESS = {tag_key(t) for t in ENDLESS_TAGS}
 _SOFTWARE = {tag_key(t) for t in SOFTWARE_TAGS}
 _SHORT = {tag_key(t) for t in SHORT_SESSION_TAGS}
 _LONG = {tag_key(t) for t in LONG_SESSION_TAGS}
@@ -123,6 +131,7 @@ class TasteProfile:
     active: list[GameSummary]
     completed: list[GameSummary]
     abandoned: list[GameSummary]
+    stopped_endless: list[GameSummary]  # live-service/competitive games you haven't touched in 90+ days
     unplayed: list[GameSummary]
     recent_games: list[GameSummary]
     rising_tags: list[str]  # bigger share of recent play than of all-time play
@@ -164,7 +173,7 @@ def gather(
             tags[g.appid] = TagInfo(g.appid, {}, "none")
     fallback = sum(1 for t in tags.values() if t.source != "steamspy")
     if fallback:
-        notes.append(f"{fallback} games had no SteamSpy tags, so their store genres were used (or nothing).")
+        notes.append(f"{_plural(fallback, 'game')} had no SteamSpy tags, so their store genres were used (or nothing).")
 
     achievements: dict[int, AchievementProgress | None] = {}
     failed: dict[str, int] = defaultdict(int)
@@ -190,7 +199,7 @@ def gather(
             private_streak = 0
     if private:
         notes.append(
-            f"Steam wouldn't share achievements for {private} games because your Game details "
+            f"Steam wouldn't share achievements for {_plural(private, 'game')} because your Game details "
             "aren't public. Your library still loads because your API key belongs to your own "
             "account, but achievements don't get that exception. To fix it, open "
             "https://steamcommunity.com/my/edit/settings and set 'Game details' to Public."
@@ -198,7 +207,7 @@ def gather(
     if failed:
         reason, count = max(failed.items(), key=lambda kv: kv[1])
         notes.append(
-            f"Couldn't read achievements for {sum(failed.values())} games. "
+            f"Couldn't read achievements for {_plural(sum(failed.values()), 'game')}. "
             f"Most common error ({count}x): {reason}"
         )
 
@@ -225,11 +234,28 @@ def _game_tags(info: TagInfo | None) -> dict[str, float]:
     return {t: v / best for t, v in top if tag_key(t) not in _NON_DESCRIPTIVE}
 
 
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def _is_endless(info: TagInfo | None) -> bool:
+    return any(tag_key(t) in _ENDLESS for t in list(_game_tags(info))[:5])
+
+
 def _is_software(info: TagInfo | None) -> bool:
     if not info or not info.tags:
         return False
     top5 = list(normalize_tags(info.tags))[:5]
     return any(tag_key(t) in _SOFTWARE for t in top5)
+
+
+def session_fit(info: TagInfo | None) -> str:
+    """'short runs', 'long sessions', 'either' or 'unknown', from a game's genre tags."""
+    gt = {tag_key(t) for t in _game_tags(info)}
+    short, long_ = bool(gt & _SHORT), bool(gt & _LONG)
+    if short and long_:
+        return "either"
+    return "short runs" if short else "long sessions" if long_ else "unknown"
 
 
 def _weight(game: OwnedGame) -> float:
@@ -313,20 +339,26 @@ def build_profile(data: LibraryData) -> TasteProfile:
     bounced_tags = [s.tag for s in sorted(bounced_scores.values(), key=lambda s: -s.games) if s.games >= 2][:8]
 
     # Status of each game you stuck with.
-    active, completed, abandoned = [], [], []
+    active, completed, abandoned, stopped_endless = [], [], [], []
     for g in engaged:
         days = _days_ago(g.last_played, now)
+        dormant = days is None or days >= DORMANT_DAYS
         ach = data.achievements.get(g.appid)
+        if ach and ach.total < MIN_ACHIEVEMENTS:
+            ach = None
         if g.playtime_2weeks > 0 or (days is not None and days <= ACTIVE_DAYS):
             active.append(g)
+        elif _is_endless(data.tags.get(g.appid)):
+            if dormant:
+                stopped_endless.append(g)
         elif ach and ach.percent >= COMPLETED_PCT:
             completed.append(g)
-        elif ach and ach.percent < ABANDONED_PCT and (days is None or days >= DORMANT_DAYS):
+        elif ach and ach.percent < ABANDONED_PCT and dormant:
             abandoned.append(g)
     no_ach = sum(1 for g in engaged if data.achievements.get(g.appid) is None)
     if no_ach and not data.achievements_private:  # the privacy note already explains it
         notes.append(
-            f"{no_ach} of the games you've played have no achievement data, so they can't be "
+            f"No achievement data for {_plural(no_ach, 'game')} you've played, so they can't be "
             "judged finished or abandoned."
         )
 
@@ -358,6 +390,7 @@ def build_profile(data: LibraryData) -> TasteProfile:
         active=[summary(g) for g in by_recent(active)],
         completed=[summary(g) for g in by_hours(completed)],
         abandoned=[summary(g) for g in by_hours(abandoned)],
+        stopped_endless=[summary(g) for g in by_recent(stopped_endless)],
         unplayed=[summary(g) for g in unplayed],
         recent_games=[summary(g) for g in by_recent(recent)],
         rising_tags=rising,

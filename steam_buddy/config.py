@@ -13,7 +13,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-DEFAULT_MODEL = "claude-sonnet-5-5"
+DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_EFFORT = "medium"
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 DEFAULT_CACHE_PATH = Path.home() / ".cache" / "steam-buddy" / "cache.sqlite3"
 
 # SteamID64 for individual accounts: 17 digits, base 76561197960265728.
@@ -55,6 +57,7 @@ class Config:
     steam_id: str
     anthropic_api_key: Secret | None = field(repr=False)
     anthropic_model: str
+    anthropic_effort: str
     cache_path: Path
     country: str
 
@@ -92,6 +95,10 @@ def load_config(
     if require_anthropic and not anthropic_key:
         problems.append("ANTHROPIC_API_KEY is not set (get one at https://console.anthropic.com/settings/keys)")
 
+    effort = os.getenv("ANTHROPIC_EFFORT", "").strip().lower() or DEFAULT_EFFORT
+    if effort not in EFFORT_LEVELS:
+        problems.append(f"ANTHROPIC_EFFORT must be one of {', '.join(EFFORT_LEVELS)}")
+
     if problems:
         raise ConfigError(problems)
 
@@ -101,6 +108,7 @@ def load_config(
         steam_id=steam_id,
         anthropic_api_key=Secret(anthropic_key) if anthropic_key else None,
         anthropic_model=os.getenv("ANTHROPIC_MODEL", "").strip() or DEFAULT_MODEL,
+        anthropic_effort=effort,
         cache_path=Path(cache_env).expanduser() if cache_env else DEFAULT_CACHE_PATH,
         country=(os.getenv("STEAM_COUNTRY", "").strip() or "us").lower(),
     )

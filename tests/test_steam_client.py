@@ -341,3 +341,46 @@ def test_steamspy_tags_normalized(client, fake):
     fake.on("/api.php", (200, {"appid": 9, "tags": {"Multi-player": 20, "Multiplayer": 50, "Point &amp; Click": 10, "Dystopian ": 5}}))
     tags = client.get_app_tags(9).tags
     assert tags == {"Multiplayer": 50, "Point & Click": 10, "Dystopian": 5}
+
+
+def test_tag_games_parsed(client, fake):
+    fake.on("/api.php", (200, {
+        "250900": {"appid": 250900, "name": "Binding", "positive": "900", "negative": 100,
+                   "owners": "1,000,000 .. 2,000,000", "price": "1499", "discount": "50"},
+        "7": {"appid": 7, "name": "Free Thing", "positive": 10, "negative": 0, "owners": "0 .. 20,000",
+              "price": None, "discount": None},
+    }))
+    games = {g.appid: g for g in client.get_tag_games("Rogue-like")}
+    assert fake.calls[-1].url.params["tag"] == "Rogue-like"
+    assert games[250900].reviews == 1000
+    assert games[250900].positive_pct == 90
+    assert (games[250900].price, games[250900].discount) == (1499, 50)
+    assert (games[7].price, games[7].discount) == (None, 0)
+
+
+def test_store_search_keeps_only_apps(client, fake):
+    fake.on("/api/storesearch/", (200, {"total": 2, "items": [
+        {"type": "app", "id": 413150, "name": "Stardew Valley", "price": {"final": 1499}},
+        {"type": "sub", "id": 9, "name": "Bundle"},
+    ]}))
+    assert client.search_store("stardew") == [{"appid": 413150, "name": "Stardew Valley", "price_final": 1499}]
+
+
+def test_prices_batched_and_cached(fake, sleeps):
+    http = httpx.Client(transport=httpx.MockTransport(fake))
+    fake.on("/api/appdetails", (200, {
+        "1": {"success": True, "data": {"price_overview": {"currency": "USD", "initial": 2000, "final": 500,
+                                                           "discount_percent": 75, "final_formatted": "$5.00"}}},
+        "2": {"success": True, "data": []},  # free games come back with no price
+        "3": {"success": False},
+    }))
+    with Cache(":memory:") as cache:
+        c = SteamClient(Secret(KEY), STEAM_ID, http=http, cache=cache,
+                        limiter=RateLimiter({}, default_interval=0, sleep=sleeps.append))
+        prices = c.get_prices([1, 2, 3])
+        assert fake.calls[-1].url.params["appids"] == "1,2,3"
+        assert fake.calls[-1].url.params["filters"] == "price_overview"
+        assert prices[1].discount_percent == 75 and prices[1].formatted == "$5.00"
+        assert prices[2] is None and prices[3] is None
+        assert c.get_prices([1, 2]) == {1: prices[1], 2: None}
+        assert len(fake.calls) == 1

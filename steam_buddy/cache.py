@@ -29,6 +29,10 @@ TTL_SECONDS: dict[str, int] = {
     "app_reviews": 7 * DAY,
     "app_tags": 7 * DAY,
     "game_schema": 7 * DAY,
+    "tag_games": 7 * DAY,
+    "store_search": DAY,
+    # prices change with sales, so they refresh more often than other store data
+    "price": 6 * HOUR,
     # news
     "news": HOUR,
 }

@@ -13,9 +13,14 @@ Endpoints were checked against the current docs (October 2026):
     IUserReviewsService/GetAppReviews/v1       input_json; replaces the deprecated
                                                store.steampowered.com/appreviews (no key needed)
   Store
-    store.steampowered.com/api/appdetails      appids, cc, l
+    store.steampowered.com/api/appdetails      appids, cc, l; with filters=price_overview
+                                               it takes several comma-separated appids
+    store.steampowered.com/api/storesearch     term, cc, l -> {total, items[{id, name, price?}]}
   SteamSpy
-    steamspy.com/api.php?request=appdetails    tags; limit 1 request/second
+    steamspy.com/api.php?request=appdetails    tags, positive, negative; limit 1 request/second
+    steamspy.com/api.php?request=tag&tag=X     {appid: {name, positive, negative, owners,
+                                               price, initialprice, discount}}; prices are
+                                               strings in cents
 
 Every request goes through one rate limiter and retry loop. The API key is sent
 as a query parameter, so this module never puts a request URL into an error
@@ -191,6 +196,37 @@ class ReviewSummary:
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "positive_pct": round(self.positive_pct, 1)}
+
+
+@dataclass(frozen=True)
+class TagGame:
+    """A game from SteamSpy's per-tag list."""
+
+    appid: int
+    name: str
+    positive: int
+    negative: int
+    owners: str  # a range, e.g. "20,000 .. 50,000"
+    price: int | None  # cents
+    discount: int
+
+    @property
+    def reviews(self) -> int:
+        return self.positive + self.negative
+
+    @property
+    def positive_pct(self) -> float:
+        return 100 * self.positive / self.reviews if self.reviews else 0.0
+
+
+@dataclass(frozen=True)
+class Price:
+    appid: int
+    final: int  # cents
+    initial: int
+    discount_percent: int
+    formatted: str
+    currency: str
 
 
 @dataclass(frozen=True)
@@ -605,6 +641,97 @@ class SteamClient:
         details = self.get_app_details(appid)
         fallback = normalize_tags({name: 1 for name in (details.genres + details.categories)}) if details else {}
         return TagInfo(appid, fallback, "store")
+
+
+    def get_tag_games(self, tag: str, *, refresh: bool = False) -> list[TagGame]:
+        """Every game SteamSpy files under a user tag (e.g. "Roguelike Deckbuilder")."""
+
+        def fetch() -> list[dict[str, Any]]:
+            data = self._get_json(STEAMSPY_URL, {"request": "tag", "tag": tag})
+            if not isinstance(data, dict):
+                return []
+            # Keep only what we use; the full response is ~150 KB per tag.
+            return [
+                {
+                    "appid": int(g.get("appid") or k),
+                    "name": g.get("name", ""),
+                    "positive": int(g.get("positive") or 0),
+                    "negative": int(g.get("negative") or 0),
+                    "owners": str(g.get("owners", "")),
+                    "price": _int_or_none(g.get("price")),
+                    "discount": _int_or_none(g.get("discount")) or 0,
+                }
+                for k, g in data.items()
+                if isinstance(g, dict)
+            ]
+
+        raw = self._cached("tag_games", tag_key(tag), fetch, refresh)
+        return [TagGame(**g) for g in raw]
+
+    def search_store(self, term: str, *, refresh: bool = False) -> list[dict[str, Any]]:
+        """Store search by name. Ranks by title match, so it finds games, not genres."""
+
+        def fetch() -> list[dict[str, Any]]:
+            data = self._get_json(
+                f"{STORE_BASE}/api/storesearch/", {"term": term, "cc": self.country, "l": "english"}
+            )
+            items = (data or {}).get("items", [])
+            return [
+                {
+                    "appid": i["id"],
+                    "name": i.get("name", ""),
+                    # price is often missing from search results
+                    "price_final": (i.get("price") or {}).get("final"),
+                }
+                for i in items
+                if i.get("type") == "app" and "id" in i
+            ]
+
+        return self._cached("store_search", f"{self.country}:{term.lower().strip()}", fetch, refresh)
+
+    def get_prices(self, appids: list[int], *, refresh: bool = False) -> dict[int, Price | None]:
+        """Current prices, several apps per request. None for free or unreleased games."""
+        result: dict[int, Price | None] = {}
+        missing: list[int] = []
+        for appid in appids:
+            key = f"{appid}:{self.country}"
+            cached = None if (refresh or self.cache is None) else self.cache.get("price", key)
+            if cached is None:
+                missing.append(appid)
+            else:
+                result[appid] = Price(**cached["price"]) if cached["price"] else None
+
+        for chunk in (missing[i : i + 50] for i in range(0, len(missing), 50)):
+            data = self._get_json(
+                f"{STORE_BASE}/api/appdetails",
+                {"appids": ",".join(map(str, chunk)), "cc": self.country, "filters": "price_overview"},
+            ) or {}
+            for appid in chunk:
+                entry = data.get(str(appid)) or {}
+                po = (entry.get("data") or {}).get("price_overview") if entry.get("success") else None
+                price = (
+                    Price(
+                        appid=appid,
+                        final=po.get("final", 0),
+                        initial=po.get("initial", 0),
+                        discount_percent=po.get("discount_percent", 0),
+                        formatted=po.get("final_formatted", ""),
+                        currency=po.get("currency", ""),
+                    )
+                    if po
+                    else None
+                )
+                result[appid] = price
+                if self.cache is not None:
+                    self.cache.set("price", f"{appid}:{self.country}", {"price": asdict(price) if price else None})
+        return result
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def tag_key(tag: str) -> str:
