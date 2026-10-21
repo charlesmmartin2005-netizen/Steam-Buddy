@@ -45,7 +45,9 @@ ASSET_BASE = "https://shared.akamai.steamstatic.com/store_item_assets/"
 ART = ASSET_BASE + "steam/apps/{appid}/{file}"
 GET_ITEMS = "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/"
 # Steam's GetItems names each asset; newer games keep theirs under hashed paths the classic names miss.
-ASSETS = {"header": "header", "capsule": "library_capsule", "hero": "library_hero"}
+# Some games list only the double-size library images, so those are the second choice.
+ASSETS = {"header": ("header",), "capsule": ("library_capsule", "library_capsule_2x"),
+          "hero": ("library_hero", "library_hero_2x")}
 CLASSIC = {"header": "header.jpg", "capsule": "library_600x900.jpg", "hero": "library_hero.jpg"}
 
 ArtLookup = Callable[[int], dict[str, str]]
@@ -59,8 +61,8 @@ def art(appid: int, assets: dict[str, Any] | None = None) -> dict[str, str]:
     assets = assets or {}
     fmt = assets.get("asset_url_format")
     out = {}
-    for kind, key in ASSETS.items():
-        name = assets.get(key)
+    for kind, keys in ASSETS.items():
+        name = next((assets[k] for k in keys if assets.get(k)), None)
         out[kind] = ASSET_BASE + fmt.replace("${FILENAME}", name) if fmt and name else ART.format(
             appid=appid, file=CLASSIC[kind])
     return out
@@ -213,6 +215,9 @@ def _handler(app: App, port: int) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            # Another site can't show the app in a frame and trick a click on it.
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
             self.end_headers()
             self.wfile.write(body)
 

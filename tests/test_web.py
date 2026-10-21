@@ -52,6 +52,15 @@ def test_art_uses_getitems_names_and_falls_back_per_image():
     assert a["hero"].endswith("/steam/apps/7/library_hero.jpg")
 
 
+def test_art_takes_double_size_library_images_when_those_are_all_steam_lists():
+    # The shape GetItems returns for some games: only the _2x library capsule, with a cache-busting query.
+    assets = {"asset_url_format": "steam/apps/2623190/${FILENAME}?t=1753715775",
+              "header": "a7ce/header.jpg", "library_capsule_2x": "b523/library_600x900_2x.jpg"}
+    a = art(2623190, assets)
+    assert a["capsule"].endswith("/steam/apps/2623190/b523/library_600x900_2x.jpg?t=1753715775")
+    assert a["header"].endswith("/steam/apps/2623190/a7ce/header.jpg?t=1753715775")
+
+
 def _transport(handler):
     return httpx.Client(transport=httpx.MockTransport(handler))
 
@@ -189,6 +198,13 @@ def test_page_carries_the_token(server):
     r = client.get("/")
     assert r.status_code == 200 and "text/html" in r.headers["content-type"]
     assert app.token in r.text and "__BUDDY_TOKEN__" not in r.text
+
+
+def test_other_sites_cant_frame_the_app(server):
+    app, client, _ = server
+    for r in (client.get("/"), client.get("/api/home", headers={"X-Buddy-Token": app.token})):
+        assert r.headers["x-frame-options"] == "DENY"
+        assert r.headers["content-security-policy"] == "frame-ancestors 'none'"
 
 
 def test_api_needs_the_token(server):

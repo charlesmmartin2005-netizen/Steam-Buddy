@@ -214,12 +214,15 @@ const TOKEN = "__BUDDY_TOKEN__";
 let DATA = null;
 
 // -- helpers: every piece of text goes in as a text node, never as HTML ------------------
+// Links come from Steam's data, so only web, Steam and in-page links are allowed (never javascript:).
+const SAFE_HREF = /^(https?:|steam:|#)/i;
 function h(tag, attrs, ...kids) {
   const el = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue;
     if (k === "class") el.className = v;
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else if (k === "href") el.setAttribute(k, SAFE_HREF.test(v) ? v : "#");
     else el.setAttribute(k, v === true ? "" : v);
   }
   for (const kid of kids.flat()) if (kid != null && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
@@ -380,7 +383,7 @@ function renderFeed() {
     art(header(g), g.name, "post-img", `${g.name} art`),
     h("div", { class: "post-actions" },
       h("a", { class: "icon-btn", href: "#chat", "aria-label": `Ask Steam Buddy about ${g.name}`,
-        onclick: () => setTimeout(() => ask(`What's new in ${g.name}?`), 0) }, svg(ICON.chat, 22)),
+        onclick: () => draft(`What's new in ${g.name}?`) }, svg(ICON.chat, 22)),
       h("a", { class: "icon-btn", href: p.url, target: "_blank", rel: "noopener", "aria-label": "Open the full post" }, svg(ICON.link, 22)),
       h("div", { class: "sp" }),
       h("a", { class: "small-btn", href: g.play_url || `steam://run/${g.appid}` }, "Play")),
@@ -423,7 +426,7 @@ function renderPicks(index) {
           h("div", { style: "display:flex;gap:10px" },
             h("button", { class: "btn ghost", type: "button", style: "flex:1;justify-content:center", onclick: () => go(i + 1) }, "Not for me"),
             h("a", { class: "btn ghost", href: "#chat", style: "flex:1;justify-content:center",
-              onclick: () => setTimeout(() => ask(`Tell me more about ${g.name}. Would I like it?`), 0) }, svg(ICON.chat, 16), "Ask about it"))))),
+              onclick: () => draft(`Tell me more about ${g.name}. Would I like it?`) }, svg(ICON.chat, 16), "Ask about it"))))),
     h("div", { class: "pager" },
       h("button", { class: "icon-btn", type: "button", "aria-label": "Previous pick", onclick: () => go(i - 1) }, svg(ICON.left, 22)),
       h("div", { class: "dots", "aria-hidden": "true" }, all.map((_, j) => h("div", { class: "dot" + (j === i ? " on" : "") }))),
@@ -458,6 +461,13 @@ function chatIntro() {
   msgs().append(h("div", { class: "msg buddy" },
     h("p", {}, "Ask anything about your games. I look at your library, playtime, wishlist and the store before answering."),
     h("div", { class: "suggest" }, ideas.map(q => h("button", { class: "tag", type: "button", style: "border:0;cursor:pointer", onclick: () => ask(q) }, q)))));
+}
+// Puts a question in the chat box without sending it, so a tap elsewhere never spends credits by surprise.
+function draft(question) {
+  if (location.hash !== "#chat") { location.hash = "#chat"; route(); }
+  const q = document.getElementById("q");
+  q.value = question;
+  q.focus();
 }
 let busy = false;
 async function ask(question) {

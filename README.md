@@ -251,7 +251,9 @@ Ctrl+C in the terminal stops it. Four screens:
   game worth going back to, as posts with the game's art.
 - **Picks**: one card per recommendation, with its match score, reviews, price
   and the games of yours it's like.
-- **Chat**: the same chat as the terminal. Only this screen calls Claude.
+- **Chat**: the same chat as the terminal. Only this screen calls Claude. The
+  "Ask" buttons on posts and picks put a question in the chat box; nothing is
+  sent until you press Send.
 
 The home screen is built from the same data as the digest, so it's free and
 reused for 15 minutes; the refresh button in Activity rebuilds it. Game art
