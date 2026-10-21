@@ -6,7 +6,7 @@ on news for the games you care about, and answers questions like "what should I
 play tonight?". It's a Python CLI that chats with Claude, and Claude uses tools
 backed by your real Steam data.
 
-> Status: **Phase 1 (setup)**. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+> Status: **Phase 2 (Steam client + cache)**. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Requirements
 
@@ -81,6 +81,21 @@ Changes can take a few minutes to reach the API.
 Create a key at <https://console.anthropic.com/settings/keys> and put it in
 `.env` as `ANTHROPIC_API_KEY=...`. You can set `ANTHROPIC_MODEL` to pick a
 different Claude model (default `claude-sonnet-5-5`).
+
+## 5. Check that Steam Buddy can see your library
+
+```bash
+python scripts/print_library.py              # top 50 games by playtime
+python scripts/print_library.py --limit 0    # every game
+python scripts/print_library.py --refresh    # skip the cache and re-fetch
+```
+
+If your game details are private, it tells you exactly which setting to change
+instead of printing an empty table.
+
+Responses are cached locally so repeat runs are fast and polite to Steam:
+library data for a day, store data for a week, news for an hour. Use
+`--refresh` after changing privacy settings or buying a game.
 
 ## Running tests
 
