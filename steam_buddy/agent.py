@@ -48,8 +48,9 @@ back to" answers are the opposite: those must be games they own.
 - For open questions like "what should I buy next?", use recommend_games; for "games like X", \
 find_similar_games; for lesser-known picks, find_hidden_gems (tags are optional). recommend_games and \
 find_hidden_gems score each game against the user's taste, find_similar_games against the game or tags \
-asked about. Build your reasons from because_you_played or shares_tags, and mention tags_you_tend_to_drop \
-and early_access when present. match is only meaningful compared within one list.
+asked about. Build your reasons from because_you_played (the user's most similar games, with hours and \
+shared tags) or shares_tags, and mention tags_you_tend_to_drop and early_access when present. match is \
+only meaningful compared within one list.
 - Before you recommend a game from those tools, check it with get_game_details if its reviews, price \
 or release status matter to the answer.
 

@@ -2,15 +2,16 @@ import pytest
 
 from steam_buddy.profile import TagScore, TasteProfile
 from steam_buddy.recommend import (
+    closest_played,
     cosine,
     game_vector,
     is_early_access,
     rank,
+    reason_tags,
     seed_tags,
-    shared_tags,
     taste_vector,
 )
-from steam_buddy.steam_client import SteamAPIError, TagGame, TagInfo
+from steam_buddy.steam_client import OwnedGame, SteamAPIError, TagGame, TagInfo
 
 
 def game(appid, positive=950, negative=50):
@@ -95,4 +96,31 @@ def test_early_access_and_shared_tags():
     assert is_early_access(i)
     assert not is_early_access(info(2, {"Rogue-like": 1}))
     assert "earlyaccess" not in game_vector(i)  # it says how a game is sold, not what it's like
-    assert shared_tags({"pixelgraphics": 0.9, "roguelike": 0.1}, i) == ["Pixel Graphics", "Rogue-like"]
+    assert reason_tags(i, {"pixelgraphics": 0.9, "roguelike": 0.1}) == ["Pixel Graphics", "Rogue-like"]
+
+
+def test_reasons_prefer_specific_tags_and_only_cite_top_tags():
+    i = info(1, {"Action": 10, "Bullet Hell": 9, "A": 8, "B": 7, "C": 6, "D": 5, "Pixel Graphics": 4})
+    weights = {"action": 0.9, "bullethell": 0.1, "pixelgraphics": 0.9}
+    # Action counts more in your taste, but Bullet Hell says more; Pixel Graphics is 7th, so it's not cited.
+    assert reason_tags(i, weights) == ["Bullet Hell", "Action"]
+
+
+def test_closest_played_weighs_similarity_by_hours():
+    candidate = info(1, {"Bullet Hell": 10, "Action Roguelike": 8})
+    played = [
+        (OwnedGame(10, "Tiny Rogues", 9000, 0, None), game_vector(info(10, {"Bullet Hell": 10, "Action Roguelike": 9}))),
+        (OwnedGame(11, "Short Clone", 90, 0, None), game_vector(info(11, {"Bullet Hell": 10, "Action Roguelike": 8}))),
+        (OwnedGame(12, "Big Sim", 50000, 0, None), game_vector(info(12, {"Farming Sim": 10}))),
+    ]
+    out = closest_played(candidate, played)
+    assert [(g.name, tags) for g, tags in out] == [
+        ("Tiny Rogues", ["Bullet Hell", "Action Roguelike"]),
+        ("Short Clone", ["Bullet Hell", "Action Roguelike"]),
+    ]
+
+
+def test_store_feature_categories_are_not_taste():
+    i = TagInfo(1, {"Action": 1, "DualShock Controller Support": 1, "Xbox Controller Support": 1,
+                    "Steam Leaderboards": 1}, "store")
+    assert game_vector(i) == {"action": 1.0}

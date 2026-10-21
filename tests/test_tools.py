@@ -182,7 +182,9 @@ def test_hidden_gems_default_to_your_top_tags(tools, fake):
     assert set(fake.tag_calls) == {"Rogue-like", "Pixel Graphics", "Deckbuilding"}  # Action skipped as too broad
     gem = next(g for g in out["games"] if g["appid"] == 101)
     assert gem["early_access"] is True
-    assert {"tag": "Rogue-like", "your_games": ["Rogue Runner", "Deck Delver"]} in gem["because_you_played"]
+    # Small Gem is a roguelike deckbuilder: Deck Delver is the closest thing you played.
+    assert gem["because_you_played"][0] == {"game": "Deck Delver", "hours": 100.0,
+                                            "shared_tags": ["Rogue-like", "Deckbuilding"]}
 
 
 def test_recommendations_skip_owned_weak_and_noisy_games(tools, fake):
@@ -203,6 +205,15 @@ def test_recommendations_flag_tags_you_drop(tools):
 def test_recommendations_respect_a_price_cap(tools):
     out = call(tools, "recommend_games", max_price_usd=5)
     assert [g["appid"] for g in out["games"]] == [101]
+    assert out["games"][0]["price"] == "$4.99 (SteamSpy, may be out of date)"
+
+
+def test_live_store_prices_replace_steamspy_ones(tools, fake):
+    fake.get_prices = lambda appids, **kw: {101: Price(101, 999, 999, 0, "$9.99", "USD")}
+    # SteamSpy still shows Small Gem at $4.99, but the sale has ended, so it no longer fits under $5.
+    assert call(tools, "recommend_games", max_price_usd=5)["games"] == []
+    gem = next(g for g in call(tools, "recommend_games")["games"] if g["appid"] == 101)
+    assert (gem["price"], gem["discount_percent"]) == ("$9.99", 0)
 
 
 def test_search_flags_owned_games(tools):

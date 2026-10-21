@@ -20,12 +20,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from .profile import TasteProfile, _game_tags, _is_software
-from .steam_client import SteamAPIError, TagGame, TagInfo, normalize_tags, tag_key
+from .steam_client import OwnedGame, SteamAPIError, TagGame, TagInfo, normalize_tags, tag_key
 
 SHORTLIST = 15  # candidates whose own tags get fetched
 SEED_TAGS = 4  # how many of your top tags seed the candidate pool
 TASTE_TAGS = 30  # how many of your top tags make up your taste vector
 DROP_PENALTY = 0.1  # score lost per tag you tend to drop among a game's top 5
+REASON_TAGS = 6  # reasons only cite a game's top tags, the ones that say what it is
+CLOSEST_MIN = 0.3  # a game you played must be at least this similar to be cited as a reason
 
 # Umbrella tags carried by tens of thousands of games (Action: ~39,000). They still
 # count when scoring, but a pool seeded from them is mostly noise.
@@ -126,7 +128,28 @@ def rank(
     return scored
 
 
-def shared_tags(target: dict[str, float], info: TagInfo | None, n: int = 3) -> list[str]:
-    """The game's tags that count most toward the target, in the game's spelling."""
-    weights = [(target.get(tag_key(t), 0.0) * w, t) for t, w in _game_tags(info).items()]
-    return [t for w, t in sorted(weights, key=lambda x: -x[0]) if w > 0][:n]
+def reason_tags(info: TagInfo | None, weights: dict[str, float], n: int = 3) -> list[str]:
+    """Among a game's top tags, those that weigh most in `weights`, specific tags before broad ones."""
+    top = list(_game_tags(info).items())[:REASON_TAGS]
+    scored = [(t, w * weights.get(tag_key(t), 0.0)) for t, w in top]
+    scored = [x for x in scored if x[1] > 0]
+    scored.sort(key=lambda x: (tag_key(x[0]) in _BROAD, -x[1]))
+    return [t for t, _ in scored[:n]]
+
+
+def closest_played(
+    info: TagInfo | None, played: list[tuple[OwnedGame, dict[str, float]]], n: int = 2
+) -> list[tuple[OwnedGame, list[str]]]:
+    """The games you played that are most like this one.
+
+    Similarity counts most (squared), then your hours, so a near-identical game
+    you played for 100 hours beats a loosely similar one you played for 200.
+    """
+    vector = game_vector(info)
+    scored = []
+    for g, gv in played:
+        sim = cosine(vector, gv)
+        if sim >= CLOSEST_MIN:
+            scored.append((sim * sim * math.sqrt(g.hours), g, gv))
+    scored.sort(key=lambda x: -x[0])
+    return [(g, reason_tags(info, gv)) for _, g, gv in scored[:n]]

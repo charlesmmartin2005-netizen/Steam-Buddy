@@ -16,9 +16,20 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .profile import TasteProfile, _game_tags, _is_software, build_profile, gather, session_fit
-from .recommend import SHORTLIST, Scored, cosine, game_vector, rank, seed_tags, shared_tags, taste_vector
-from .steam_client import MIN_TAG_REVIEWS, OwnedGame, SteamAPIError, SteamClient, TagGame, tag_key
+from .profile import BOUNCE_MAX_MINUTES, TasteProfile, _game_tags, _is_software, build_profile, gather, session_fit
+from .recommend import (
+    REASON_TAGS,
+    SHORTLIST,
+    Scored,
+    closest_played,
+    cosine,
+    game_vector,
+    rank,
+    reason_tags,
+    seed_tags,
+    taste_vector,
+)
+from .steam_client import MIN_TAG_REVIEWS, OwnedGame, Price, SteamAPIError, SteamClient, TagGame, tag_key
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +89,7 @@ class SteamTools:
         self.client = client
         self._profile: TasteProfile | None = None
         self._tag_spellings: dict[str, str] | None = None
+        self._played: list[tuple[OwnedGame, dict[str, float]]] = []  # games you stuck with, with their tags
 
     # -- shared state -------------------------------------------------------
 
@@ -88,6 +100,11 @@ class SteamTools:
         if self._profile is None:
             data = gather(self.client)
             self._profile = build_profile(data)
+            self._played = [
+                (g, game_vector(data.tags.get(g.appid)))
+                for g in data.games
+                if g.playtime_forever >= BOUNCE_MAX_MINUTES and not _is_software(data.tags.get(g.appid))
+            ]
             self._tag_spellings = {}
             for info in data.tags.values():
                 for tag in info.tags:
@@ -220,7 +237,7 @@ class SteamTools:
                       shortlist=max(SHORTLIST, n))
         return {
             "pool_from_your_tags": seeds,
-            "games": [self._scored_out(s, target) for s in ranked[:n]],
+            "games": self._present(ranked, target, n, max_cents=max_cents),
             "candidates_considered": len(candidates),
             **({"tags_with_no_games": empty} if empty else {}),
         }
@@ -247,7 +264,7 @@ class SteamTools:
                       shortlist=max(SHORTLIST, n))
         return {
             "pool_from_tags": [self._steam_tag(t) for t in tag_list],
-            "games": [self._scored_out(s, target, versus_you=False) for s in ranked[:n]],
+            "games": self._present(ranked, target, n, versus_you=False),
             "excluded_owned": sum(1 for a in pool if a in owned),
             **({"tags_with_no_games": empty} if empty else {}),
         }
@@ -279,35 +296,63 @@ class SteamTools:
         return {
             "criteria": {"pool_from_tags": [self._steam_tag(t) for t in tag_list], "min_positive_pct": min_pct,
                          "review_count_between": [min_reviews, max_reviews]},
-            "games": [self._scored_out(s, target) for s in ranked[:n]],
+            "games": self._present(ranked, target, n),
             "candidates_considered": len(gems),
             "note": "Review counts come from SteamSpy and can lag Steam by a few days; "
                     "call get_game_details to confirm before recommending.",
             **({"tags_with_no_games": empty} if empty else {}),
         }
 
-    def _scored_out(self, s: Scored, target: dict[str, float], *, versus_you: bool = True) -> dict[str, Any]:
+    def _present(
+        self, ranked: list[Scored], target: dict[str, float], n: int, *,
+        versus_you: bool = True, max_cents: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """The top n results, priced live from the store (SteamSpy's prices can be days old)."""
+        try:
+            prices = self.client.get_prices([s.game.appid for s in ranked])
+        except SteamAPIError:
+            prices = {}
+        out = []
+        for s in ranked:
+            price = prices.get(s.game.appid)
+            if max_cents is not None and price and price.currency == "USD" and price.final > max_cents:
+                continue  # the sale SteamSpy saw has ended
+            out.append(self._scored_out(s, target, price, versus_you=versus_you))
+            if len(out) == n:
+                break
+        return out
+
+    def _scored_out(
+        self, s: Scored, target: dict[str, float], price: Price | None, *, versus_you: bool
+    ) -> dict[str, Any]:
         g = s.game
+        if price:
+            shown_price, discount = price.formatted, price.discount_percent
+        elif g.price == 0:
+            shown_price, discount = "Free", 0
+        else:
+            shown_price = None if g.price is None else f"${g.price / 100:.2f} (SteamSpy, may be out of date)"
+            discount = g.discount
         out: dict[str, Any] = {
             "appid": g.appid,
             "name": g.name,
             "match": round(100 * s.match),
             "positive_pct": round(g.positive_pct, 1),
             "reviews": g.reviews,
-            "price_usd": None if g.price is None else round(g.price / 100, 2),
-            "discount_percent": g.discount,
-            "tags": list(_game_tags(s.info))[:6],
+            "price": shown_price,
+            "discount_percent": discount,
+            "tags": list(_game_tags(s.info))[:REASON_TAGS],
             "session_style": session_fit(s.info),
             "early_access": s.early_access,
         }
-        shared = shared_tags(target, s.info)
         if versus_you:
-            by_key = {tag_key(t.tag): t for t in self.profile().top_tags}
+            out["fits_your_tags"] = reason_tags(s.info, target)
             out["because_you_played"] = [
-                {"tag": t, "your_games": by_key[tag_key(t)].top_games[:2]} for t in shared if tag_key(t) in by_key
+                {"game": played.name, "hours": round(played.hours, 1), "shared_tags": tags}
+                for played, tags in closest_played(s.info, self._played)
             ]
         else:
-            out["shares_tags"] = shared
+            out["shares_tags"] = reason_tags(s.info, target)
         if s.drops:
             out["tags_you_tend_to_drop"] = s.drops
         return out
@@ -352,7 +397,9 @@ class SteamTools:
                 "on_sale": bool(p and p.discount_percent > 0),
                 "release_date": d.release_date if d else None,
                 "coming_soon": d.coming_soon if d else None,
-                "tags": list(_game_tags(info))[:6],
+                "tags": list(_game_tags(info))[:REASON_TAGS],
+                **({"tags_from": "store genres; SteamSpy has no user tags for it"}
+                   if info and info.source != "steamspy" else {}),
                 "match": round(100 * cosine(target, game_vector(info))) if info and info.tags else None,
                 "reviews": None if not reviews else {
                     "summary": reviews.description, "positive_pct": round(reviews.positive_pct, 1),
@@ -492,8 +539,10 @@ TOOL_DESCRIPTIONS = {
     "recommend_games": "The best-reviewed games the user does NOT own, scored against their whole taste "
                        "profile. Use it for open questions like \"what should I buy next?\". Each game has "
                        "match (0-100, how closely its tags fit their taste; compare within a list), "
-                       "because_you_played (shared tags and the user's games behind them), "
-                       "tags_you_tend_to_drop, early_access and session_style. Owned games are already removed.",
+                       "fits_your_tags, because_you_played (the user's most similar games, their hours and the "
+                       "tags they share), tags_you_tend_to_drop, early_access and session_style. Sorted by match "
+                       "adjusted for review confidence and dropped tags. Prices are live from the store. Owned "
+                       "games are already removed.",
     "find_similar_games": "Well-reviewed games the user does NOT own that are like a given game (appid) or a "
                           "list of tags, with match (0-100) against that game or those tags. Owned games are "
                           "already removed.",
