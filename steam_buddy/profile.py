@@ -54,6 +54,10 @@ NON_DESCRIPTIVE_TAGS = {
     "Beautiful", "Family Friendly", "Moddable", "Controller", "Steam Achievements",
     "Full controller support", "Steam Cloud", "Steam Trading Cards", "Partial Controller Support",
     "Remote Play Together", "Family Sharing", "In-App Purchases", "Includes level editor",
+    # store categories, used when SteamSpy has no tags for a game
+    "Steam Leaderboards", "Steam Workshop", "Steam Timeline", "Stats", "Captions available",
+    "Commentary available", "HDR available", "Valve Anti-Cheat enabled", "Remote Play on TV",
+    "Remote Play on Phone", "Remote Play on Tablet", "Includes Source SDK",
 }
 
 # Any of these among a title's top tags marks it as software, not a game.
@@ -232,7 +236,8 @@ def _game_tags(info: TagInfo | None) -> dict[str, float]:
         return {}
     top = list(normalize_tags(info.tags).items())[:TAGS_PER_GAME]
     best = max(v for _, v in top) or 1
-    return {t: v / best for t, v in top if tag_key(t) not in _NON_DESCRIPTIVE}
+    # "controller" catches the store's many controller categories (DualShock, Xbox, ...).
+    return {t: v / best for t, v in top if (k := tag_key(t)) not in _NON_DESCRIPTIVE and "controller" not in k}
 
 
 def _plural(n: int, word: str) -> str:

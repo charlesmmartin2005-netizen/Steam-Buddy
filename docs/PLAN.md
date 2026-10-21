@@ -20,6 +20,7 @@ steam-buddy/
 │   ├── cache.py            # Phase 2: SQLite cache with per-kind TTLs
 │   ├── profile.py          # Phase 3: taste profile
 │   ├── tools.py            # Phase 4: Claude tool definitions + handlers
+│   ├── recommend.py        # Phase 5: scoring candidates against your taste
 │   ├── agent.py            # Phase 4: tool-use loop + system prompt
 │   └── main.py             # CLI entry: `steam-buddy`, `--check`, `--digest`
 ├── scripts/
@@ -74,8 +75,27 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
      removed whole. Server-side fallback (`fallbacks: "default"`) retries a mistaken
      safety decline on another model. At most 15 tool rounds per question.
    - `main.py`: the chat REPL with `/reset`, `/help`, `/quit` and `--refresh`.
-5. **Hidden gems + recommendation quality**: high positive %, low review count,
-   tag match scoring; filter owned games.
+5. **Hidden gems + recommendation quality** (done), in `recommend.py`:
+   - Candidates come from SteamSpy's per-tag lists for your top four *specific*
+     tags. Umbrella tags (Action, RPG, Multiplayer...) are skipped as seeds because
+     their lists hold tens of thousands of games, but they still count in scoring.
+     Tag lists drop games with under 50 reviews before caching.
+   - The pool is pre-ranked cheaply (how much the tags a game was found under weigh
+     in your profile, then review confidence). The best 15 get their own tags
+     fetched and are scored by cosine similarity between their tags and your taste
+     vector (your top 30 tags, as shares of playtime-weighted play), times review
+     confidence, minus 0.1 for each tag you tend to drop among their top five.
+     Umbrella tags count half, and games with fewer than five tags get a
+     proportionally lower match (one "Action" tag isn't evidence of a fit).
+   - Every result explains itself: `because_you_played` names your most similar
+     played games (specific tags only; at least 5 hours or playing now; never one
+     you likely abandoned) and the tags they share. A taste-based result with no
+     such game is left out and listed as `left_out_no_link_to_your_games`. Also
+     `fits_your_tags`, `tags_you_tend_to_drop`, `early_access`, `session_style`. Prices come live from the store in one batched request,
+     since SteamSpy's can be days old; review counts are still SteamSpy's.
+   - New `recommend_games` tool (optional price cap); `find_hidden_gems` searches
+     your own top tags when no tags are given; `find_similar_games` scores against
+     all of the source game's tags; wishlist items get tags, reviews and a match.
 6. **News + weekly digest**: `--digest` prints 3 recs, 2 gems, news for recent
    top games, one backlog game to revisit.
 
@@ -93,7 +113,7 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
 | Store details | `store.steampowered.com/api/appdetails` | no | about 200 requests per 5 min; we space them 1.5s apart |
 | Reviews | `IUserReviewsService/GetAppReviews/v1` | no | replaces the deprecated `store.steampowered.com/appreviews`, which we keep as a fallback |
 | Tags | `steamspy.com/api.php?request=appdetails` | no | 1 request/second; falls back to store genres + categories |
-| Games by tag | `steamspy.com/api.php?request=tag&tag=X` | no | every game with that tag, with review counts and price; about 150 KB per tag |
+| Games by tag | `steamspy.com/api.php?request=tag&tag=X` | no | every game with that tag, with review counts and price: 464 games (150 KB) for Roguelike Deckbuilder, 39,000 (13 MB) for Action |
 | Store search | `store.steampowered.com/api/storesearch/` | no | matches titles only; price often missing |
 | Prices | `store.steampowered.com/api/appdetails?filters=price_overview` | no | the one filter that accepts many app ids per request; cached 6 hours |
 

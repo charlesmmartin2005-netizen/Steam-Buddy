@@ -347,8 +347,9 @@ def test_tag_games_parsed(client, fake):
     fake.on("/api.php", (200, {
         "250900": {"appid": 250900, "name": "Binding", "positive": "900", "negative": 100,
                    "owners": "1,000,000 .. 2,000,000", "price": "1499", "discount": "50"},
-        "7": {"appid": 7, "name": "Free Thing", "positive": 10, "negative": 0, "owners": "0 .. 20,000",
+        "7": {"appid": 7, "name": "Free Thing", "positive": 60, "negative": 0, "owners": "0 .. 20,000",
               "price": None, "discount": None},
+        "8": {"appid": 8, "name": "Nobody Played", "positive": 3, "negative": 1, "owners": "0 .. 20,000"},
     }))
     games = {g.appid: g for g in client.get_tag_games("Rogue-like")}
     assert fake.calls[-1].url.params["tag"] == "Rogue-like"
@@ -356,6 +357,7 @@ def test_tag_games_parsed(client, fake):
     assert games[250900].positive_pct == 90
     assert (games[250900].price, games[250900].discount) == (1499, 50)
     assert (games[7].price, games[7].discount) == (None, 0)
+    assert 8 not in games  # too few reviews to judge
 
 
 def test_store_search_keeps_only_apps(client, fake):

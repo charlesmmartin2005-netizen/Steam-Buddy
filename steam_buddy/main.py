@@ -30,6 +30,7 @@ TOOL_LABELS = {
     "get_recently_played": "Checking what you've played lately",
     "get_game_details": "Looking up a game",
     "search_store": "Searching the store",
+    "recommend_games": "Scoring games against your taste",
     "find_similar_games": "Finding similar games",
     "find_hidden_gems": "Digging for hidden gems",
     "get_game_news": "Reading the news",
@@ -46,6 +47,7 @@ HELP = """Ask anything about your games, for example:
   what have I abandoned that's worth going back to?
   what's on sale from my wishlist?
   find me hidden gems like my favourite roguelikes
+  what should I buy next for under $20?
 
 Commands: /reset starts a new conversation, /help shows this, /quit exits."""
 
