@@ -146,6 +146,12 @@ class NewsItem:
     contents: str
     feedlabel: str
     date: int
+    feedname: str = ""
+    feed_type: int | None = None  # 1 = the developer's own Steam announcement, 0 = press article
+
+    @property
+    def official(self) -> bool:
+        return self.feed_type == 1 or self.feedname == "steam_community_announcements"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -548,6 +554,8 @@ class SteamClient:
                 contents=n.get("contents", ""),
                 feedlabel=n.get("feedlabel", ""),
                 date=n.get("date", 0),
+                feedname=n.get("feedname", ""),
+                feed_type=_int_or_none(n.get("feed_type")),
             )
             for n in raw
         ]

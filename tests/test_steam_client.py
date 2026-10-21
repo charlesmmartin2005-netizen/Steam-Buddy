@@ -288,10 +288,14 @@ def test_steamspy_empty_tags_list(client, fake):
 
 def test_wishlist_and_news(client, fake):
     fake.on("/IWishlistService/GetWishlist/v1/", (200, {"response": {"items": [{"appid": 70, "priority": 1, "date_added": 1600000000}]}}))
-    fake.on("/ISteamNews/GetNewsForApp/v2/", (200, {"appnews": {"appid": 620, "newsitems": [{"gid": "1", "title": "Patch", "url": "u", "date": 5}]}}))
+    fake.on("/ISteamNews/GetNewsForApp/v2/", (200, {"appnews": {"appid": 620, "newsitems": [
+        {"gid": "1", "title": "Patch", "url": "u", "date": 5, "feed_type": 1, "feedname": "steam_community_announcements"},
+        {"gid": "2", "title": "Review", "url": "v", "date": 4, "feed_type": 0, "feedname": "pcgamer"},
+    ]}}))
     assert client.get_wishlist()[0].appid == 70
-    news = client.get_news(620, count=1)
+    news = client.get_news(620, count=2)
     assert news[0].title == "Patch"
+    assert [n.official for n in news] == [True, False]
     assert "key" not in fake.calls[-1].url.params  # news doesn't need the key
 
 

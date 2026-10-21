@@ -21,6 +21,7 @@ steam-buddy/
 │   ├── profile.py          # Phase 3: taste profile
 │   ├── tools.py            # Phase 4: Claude tool definitions + handlers
 │   ├── recommend.py        # Phase 5: scoring candidates against your taste
+│   ├── digest.py           # Phase 6: news, games to go back to, the weekly digest
 │   ├── agent.py            # Phase 4: tool-use loop + system prompt
 │   └── main.py             # CLI entry: `steam-buddy`, `--check`, `--digest`
 ├── scripts/
@@ -28,7 +29,7 @@ steam-buddy/
 │   └── print_profile.py    # Phase 3: taste profile
 └── tests/
     ├── fixtures/           # fake library for profile tests
-    └── test_*.py           # config, cache, client, profile, tools, agent
+    └── test_*.py           # config, cache, client, profile, recommend, tools, agent, digest
 ```
 
 The modules live in a `steam_buddy/` package rather than at the top level, mainly
@@ -96,8 +97,26 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
    - New `recommend_games` tool (optional price cap); `find_hidden_gems` searches
      your own top tags when no tags are given; `find_similar_games` scores against
      all of the source game's tags; wishlist items get tags, reviews and a match.
-6. **News + weekly digest**: `--digest` prints 3 recs, 2 gems, news for recent
-   top games, one backlog game to revisit.
+6. **News + weekly digest** (done), in `digest.py`:
+   - News posts carry `feed_type`/`feedname`, which say whether a post is the
+     developer's own Steam announcement or a press article (`is_external_url` is
+     true for both, so it can't tell them apart). Developer posts that are sale
+     ads ("40% Off Sale Ending Soon!") don't count as updates. Press headlines
+     that are mostly non-Latin script are dropped.
+   - "Worth going back to": games with 5+ hours, untouched for 90+ days and not
+     finished (likely abandoned, live-service games you stopped, or dormant top
+     games). The eight with the most hours get their news checked, and those with
+     developer updates since you last played come first.
+   - `--digest` builds the digest without calling Claude, so it's free, takes
+     seconds once the cache is warm, and is safe to schedule: three picks from
+     `recommend_games`, two hidden gems that aren't among them, up to two posts
+     for each of the four games you've played most in the last two weeks, and one
+     game to go back to. When no game you stopped has updates, it suggests the
+     never-played game that best fits your taste instead. A section whose
+     request fails is left empty with a note rather than failing the digest.
+     `--out FILE` saves it as Markdown (`{date}` in the name becomes the date).
+   - Two new chat tools: `get_recent_news` and `get_games_to_revisit`;
+     `get_game_news` results now say which posts are the developer's.
 
 ## Steam endpoints (checked against the docs, October 2026)
 
@@ -108,7 +127,7 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
 | Profile | `ISteamUser/GetPlayerSummaries/v2` | yes | `communityvisibilitystate` 3 = public |
 | Achievements | `ISteamUserStats/GetPlayerAchievements/v1` | yes | 400 = no stats, 403 = private |
 | Achievement schema | `ISteamUserStats/GetSchemaForGame/v2` | yes | |
-| News | `ISteamNews/GetNewsForApp/v2` | no | |
+| News | `ISteamNews/GetNewsForApp/v2` | no | `feed_type` 1 / `feedname` `steam_community_announcements` = the developer's own post |
 | Wishlist | `IWishlistService/GetWishlist/v1` | yes | returns app ids, priority, date added only |
 | Store details | `store.steampowered.com/api/appdetails` | no | about 200 requests per 5 min; we space them 1.5s apart |
 | Reviews | `IUserReviewsService/GetAppReviews/v1` | no | replaces the deprecated `store.steampowered.com/appreviews`, which we keep as a fallback |
@@ -129,3 +148,6 @@ httpx's own request logging.
 - Prices are cached for 6 hours rather than a week like other store data, so
   sale answers aren't stale.
 - Cache location: `~/.cache/steam-buddy/cache.sqlite3` (override with `STEAM_BUDDY_CACHE`).
+- The weekly digest is assembled in code rather than written by Claude, so it
+  costs nothing to run on a schedule. The chat can still answer the same
+  questions in conversation.

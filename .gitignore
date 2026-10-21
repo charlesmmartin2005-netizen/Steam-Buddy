@@ -3,10 +3,11 @@
 .env.*
 !.env.example
 
-# Local cache
+# Local cache and saved digests
 *.sqlite3
 *.db
 .cache/
+digests/
 
 # Python
 __pycache__/

@@ -3,7 +3,8 @@
     python -m steam_buddy.main            interactive chat
     python -m steam_buddy.main --refresh  chat, re-fetching your account data first
     python -m steam_buddy.main --check    validate .env
-    python -m steam_buddy.main --digest   weekly summary (Phase 6)
+    python -m steam_buddy.main --digest   weekly digest (no Claude call, so it's free)
+    python -m steam_buddy.main --digest --out digests/{date}.md   save it instead of printing
 """
 
 from __future__ import annotations
@@ -11,14 +12,17 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
+from rich.markdown import Markdown
 
 from .agent import Agent, AgentError
 from .cache import Cache
 from .config import Config, ConfigError, load_config
-from .steam_client import SteamClient
+from .digest import build_digest, to_markdown
+from .steam_client import ProfilePrivateError, SteamAPIError, SteamClient
 from .tools import SteamTools
 
 console = Console()
@@ -34,6 +38,8 @@ TOOL_LABELS = {
     "find_similar_games": "Finding similar games",
     "find_hidden_gems": "Digging for hidden gems",
     "get_game_news": "Reading the news",
+    "get_recent_news": "Reading news for what you've been playing",
+    "get_games_to_revisit": "Checking what's changed in games you stopped",
     "get_wishlist": "Checking your wishlist and prices",
     "get_backlog": "Going through your backlog",
 }
@@ -48,6 +54,7 @@ HELP = """Ask anything about your games, for example:
   what's on sale from my wishlist?
   find me hidden gems like my favourite roguelikes
   what should I buy next for under $20?
+  what's new in the games I've been playing?
 
 Commands: /reset starts a new conversation, /help shows this, /quit exits."""
 
@@ -116,8 +123,7 @@ def _tool_runner(tools: SteamTools, out: _Output):
 def chat(cfg: Config, *, refresh: bool = False) -> int:
     with Cache(cfg.cache_path) as cache, SteamClient.from_config(cfg, cache=cache) as steam:
         if refresh:
-            for kind in ACCOUNT_KINDS:
-                cache.clear(kind)
+            _clear_account_data(cache)
         tools = SteamTools(steam)
         out = _Output()
         try:
@@ -172,28 +178,62 @@ def chat(cfg: Config, *, refresh: bool = False) -> int:
             out.end_turn()
 
 
+def _clear_account_data(cache: Cache) -> None:
+    for kind in ACCOUNT_KINDS:
+        cache.clear(kind)
+
+
+def digest(cfg: Config, *, refresh: bool = False, out: str | None = None) -> int:
+    """Build the weekly digest and print it, or save it as Markdown when `out` is given."""
+    with Cache(cfg.cache_path) as cache, SteamClient.from_config(cfg, cache=cache) as steam:
+        if refresh:
+            _clear_account_data(cache)
+        try:
+            with console.status("[dim]Building your digest (the first run can take a couple of minutes "
+                                "while tags are fetched)…[/]"):
+                d = build_digest(SteamTools(steam))
+        except ProfilePrivateError as e:
+            console.print(f"[bold red]{e}[/]")
+            return 1
+        except SteamAPIError as e:
+            console.print(f"[bold red]Couldn't build the digest: {e}[/]")
+            return 1
+    text = to_markdown(d)
+    if out:
+        path = Path(out.replace("{date}", d.day.isoformat()))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        console.print(f"Saved your digest to [cyan]{path}[/]")
+    else:
+        console.print(Markdown(text))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="steam-buddy", description="Your personal Steam gaming agent.")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--check", action="store_true", help="validate your .env setup")
-    group.add_argument("--digest", action="store_true", help="print a weekly summary")
+    group.add_argument("--digest", action="store_true", help="print your weekly digest (no Claude call)")
+    parser.add_argument("--out", metavar="FILE", help="with --digest: save it as Markdown instead; "
+                        "{date} in the name becomes today's date")
     parser.add_argument("--refresh", action="store_true", help="re-fetch your library, wishlist and prices first")
     args = parser.parse_args(argv)
+    if args.out and not args.digest:
+        parser.error("--out only works with --digest")
     # Keep library loggers quiet; the client never logs keys, but stray debug output clutters the chat.
     logging.basicConfig(level=logging.WARNING)
 
     if args.check:
         return check_setup()
-    if args.digest:
-        console.print("[yellow]The weekly digest arrives in Phase 6.[/]")
-        return 0
     try:
-        cfg = load_config(require_anthropic=True)
+        cfg = load_config(require_anthropic=not args.digest)
     except ConfigError as e:
         console.print("[bold red]Setup isn't complete yet:[/]")
         for problem in e.problems:
             console.print(f"  • {problem}")
         return 1
+    if args.digest:
+        return digest(cfg, refresh=args.refresh, out=args.out)
     return chat(cfg, refresh=args.refresh)
 
 
