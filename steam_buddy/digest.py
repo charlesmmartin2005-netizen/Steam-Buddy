@@ -37,22 +37,27 @@ TITLE_CHARS = 110  # press headlines can run to a paragraph
 # award campaigns, stream schedules, and news about mobile versions.
 _NOT_AN_UPDATE = re.compile(
     r"\bsale\b|\d+\s?%\s?off|\bdiscount|\bdeals?\b|\bbundle\b|\bfree weekend\b|\bvot(e|ing)\b|\bawards?\b"
-    r"|\bnominat|\bgiveaway|\bmerch|\b(dev|live)?stream\b|\bdevstream|\btwitch\b|\bmobile\b|\bios\b|\bandroid\b"
+    r"|\bnominat|\bgiveaway|\bmerch|\b(dev|live)?stream\b|\bdevstream|\btwitch\b"
     r"|\s[x×]\s",  # brand tie-ins: "Iceblade of Narin x Alienware"
     re.I,
 )
+# Mobile-version news, unless it's also about the PC game: "1.4.5.7 - Out Now for PC! (Console/Mobile soon)".
+_MOBILE = re.compile(r"\bmobile\b|\bios\b|\bandroid\b", re.I)
+_PC = re.compile(r"\bpc\b|\bsteam\b", re.I)
 # Media and their contents, which would otherwise leave image URLs in the text.
 # Developer posts that bring something new to play: a named update, an expansion, a new season...
 _BIG_UPDATE = re.compile(
-    r"\bupdate\b|\bpatch\b|\bexpansion\b|\bdlc\b|\bseason\b|\bchapter\b|\boverhaul|\brework|\bout now\b"
-    r"|\bnow (available|live)\b|\bis (live|here|out)\b|\blaunch(es|ed)?\b|\bnew\b|(?<![$£€\d.])\bv?\d+\.\d+",
+    r"\bupdate\b|\bexpansion\b|\bdlc\b|\bseason\b|\bchapter\b|\boverhaul|\brework|\blaunch(es|ed)?\b|\bnew\b"
+    r"|(?<![$£€\d.])\bv?\d+\.\d+",
     re.I,
 )
-# ...but not news of one that hasn't arrived yet, small fixes, or the soundtrack.
+# Saying it has arrived settles it, even next to "console version coming soon".
+_ARRIVED = re.compile(r"\bout now\b|\bnow (available|live)\b|\bis (live|here|out)\b", re.I)
+# ...but not news of one that hasn't arrived yet, routine patches, or the soundtrack.
 _NOT_BIG = re.compile(
-    r"hotfix|preview|sneak peek|teaser|trailer|roadmap|coming|\bsoon\b|devlog|dev ?update|dev diary|state of the"
-    r"|behind the scenes|q ?& ?a|survey|soundtrack|\bost\b|single release|release date|store update|maintenance"
-    r"|known issues|\bservers?\b",
+    r"hotfix|preview|sneak peek|teaser|trailer|roadmap|coming|\bsoon\b|overview|devlog|dev ?update|dev diary"
+    r"|state of the|behind the scenes|q ?& ?a|survey|soundtrack|\bost\b|single release|release date|store update"
+    r"|stable (update|release)|monthly|maintenance|known issues|\bservers?\b",
     re.I,
 )
 _MEDIA = re.compile(
@@ -79,12 +84,14 @@ def clean_text(text: str, limit: int = 400) -> str:
 
 def is_update(item: NewsItem) -> bool:
     """A post by the developer that changes the game, so not a sale ad or a stream schedule."""
-    return item.official and not _NOT_AN_UPDATE.search(item.title)
+    t = item.title
+    return item.official and not _NOT_AN_UPDATE.search(t) and not (_MOBILE.search(t) and not _PC.search(t))
 
 
 def is_big_update(item: NewsItem) -> bool:
-    """An update that adds something to play: new content, an expansion, a named patch. Judged by its title."""
-    return is_update(item) and bool(_BIG_UPDATE.search(item.title)) and not _NOT_BIG.search(item.title)
+    """An update that adds something to play: new content, an expansion, a named update. Judged by its title."""
+    t = item.title
+    return is_update(item) and bool(_ARRIVED.search(t) or (_BIG_UPDATE.search(t) and not _NOT_BIG.search(t)))
 
 
 def _same_story(a: str, b: str) -> bool:
@@ -104,7 +111,7 @@ class NewsPost:
     url: str
     summary: str
     official: bool  # the developer's own announcement, not press
-    big_update: bool = False  # new content, an expansion or a named patch, going by the title
+    big_update: bool = False  # new content, an expansion or a named update, going by the title
 
     @classmethod
     def from_item(cls, i: NewsItem, summary_len: int = 300) -> NewsPost:

@@ -108,13 +108,15 @@ def test_sale_ads_and_press_are_not_updates():
 
 
 def test_big_updates_add_something_to_play():
-    for title in ("Completely New Enemy AI Is Here", "The Overload Update", "Terraria 1.4.5.7 - Out Now for PC!",
-                  "The Icebind is live now!", "Season 10.5: New Modes and Halloween",
-                  "Marvel Rivals Version 20261015 Patch Notes", "Charting the Unknown DLC Features Overview"):
+    for title in ("Completely New Enemy AI Is Here", "The Overload Update", "FROZEN TRAIL - 2.0 Update",
+                  "Terraria 1.4.5.7 - Out Now for PC! (Console/Mobile Soon)", "The Icebind is live now!",
+                  "Season 10.5: New Modes and Halloween"):
         assert is_big_update(news(title, 1)), title
     for title in ('"Devourer" Single Release', "Baro Ki'Teer Returns", "October Update Preview", "Hotfix 2.1.1",
                   "Dev Update: Meta Control and ChessBox", "Terraria State of the Game - September 2026",
-                  "Diaspora is coming December 9th", "Store Update 2.2.0", "40% Off: new low price"):
+                  "Diaspora is coming December 9th", "Store Update 2.2.0", "40% Off: new low price",
+                  "Marvel Rivals Version 20261015 Patch Notes", "October 2026 Stable Update",
+                  "Charting the Unknown DLC Features Overview", "SIFU Mobile is OUT NOW!"):
         assert not is_big_update(news(title, 1)), title
     assert not is_big_update(news("The Overload Update", 1, official=False))  # press
 
