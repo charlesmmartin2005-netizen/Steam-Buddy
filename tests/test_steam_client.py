@@ -335,3 +335,9 @@ def test_rate_limiter_spaces_requests():
     assert slept == [pytest.approx(1.0)]
     limiter.wait("api.steampowered.com")  # other hosts aren't held up
     assert len(slept) == 1
+
+
+def test_steamspy_tags_normalized(client, fake):
+    fake.on("/api.php", (200, {"appid": 9, "tags": {"Multi-player": 20, "Multiplayer": 50, "Point &amp; Click": 10, "Dystopian ": 5}}))
+    tags = client.get_app_tags(9).tags
+    assert tags == {"Multiplayer": 50, "Point & Click": 10, "Dystopian": 5}
