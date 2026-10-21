@@ -43,9 +43,20 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
    back to stale data when Steam is down. Detects a private library and hidden
    playtime and prints the exact setting to change. `scripts/print_library.py`
    confirms it works.
-3. **Taste profile**: playtime-weighted tags/genres, bounced-off games (< 1h),
-   finished vs abandoned (achievement %), recent trend, inferred session length.
-   Readable printout + tests on a fake library fixture.
+3. **Taste profile** (done): `profile.gather()` fetches, `build_profile()` is pure.
+   Heuristics, all constants at the top of `profile.py`:
+   - Tags: each game's top 10 SteamSpy tags, scaled so its strongest tag = 1, times
+     sqrt(hours) so one huge game can't drown out the rest. Sales-y tags (Indie,
+     Singleplayer, Great Soundtrack...) are ignored; titles whose top tags say
+     software (Wallpaper Engine) are left out.
+   - Bounced off: played under 60 minutes, unless all of it was in the last 2 weeks.
+   - Still playing: played in the last 30 days. Likely finished: 70%+ achievements.
+     Likely abandoned: under 30% achievements and untouched for 90+ days. Games
+     without achievements get no verdict.
+   - Trending: tags whose share of the last 60 days' play beats their all-time share.
+   - Session style: Steam doesn't report sessions, so it's inferred from how much
+     play is in short-run genres (roguelikes, card games) vs long-session ones
+     (open-world RPGs, survival, sims).
 4. **Tools + agent + CLI chat**: tool schemas, Claude tool-use loop, system prompt
    that grounds every recommendation in data and never suggests owned games.
 5. **Hidden gems + recommendation quality**: high positive %, low review count,

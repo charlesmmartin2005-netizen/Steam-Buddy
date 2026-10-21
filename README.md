@@ -6,7 +6,7 @@ on news for the games you care about, and answers questions like "what should I
 play tonight?". It's a Python CLI that chats with Claude, and Claude uses tools
 backed by your real Steam data.
 
-> Status: **Phase 2 (Steam client + cache)**. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+> Status: **Phase 3 (taste profile)**. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Requirements
 
@@ -96,6 +96,23 @@ instead of printing an empty table.
 Responses are cached locally so repeat runs are fast and polite to Steam:
 library data for a day, store data for a week, news for an hour. Use
 `--refresh` after changing privacy settings or buying a game.
+
+## 6. See your taste profile
+
+```bash
+python scripts/print_profile.py            # readable summary
+python scripts/print_profile.py --json     # the same data as JSON
+python scripts/print_profile.py --refresh  # re-fetch everything
+```
+
+It shows your top tags weighted by playtime (with the games behind each one),
+whether you lean toward short runs or long sessions, what's trending up in your
+recent play, games you're still playing, likely finished, likely abandoned,
+bounced off (under an hour), and never played.
+
+The first run fetches tags and achievements for every game you've played, so it
+takes a minute or two (SteamSpy allows one request per second). After that it
+comes from the cache.
 
 ## Running tests
 
