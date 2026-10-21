@@ -74,6 +74,8 @@ class FakeTools:
         return {"games": self.picks[:max_results]}
 
     def find_hidden_gems(self, max_results=None):
+        if isinstance(self.gems, Exception):
+            raise self.gems
         return {"games": self.gems[:max_results]}
 
     def best_backlog_game(self):
@@ -91,6 +93,7 @@ def test_clean_text_keeps_words_apart_and_drops_media():
            '[p]Now on Play Store[/p][p]Adapted for mobile[/p][previewyoutube=abc;full][/previewyoutube]'
            '[img src="{STEAM_CLAN_IMAGE}/2/b.png"][/img][h2]Thanks[/h2]')
     assert clean_text(raw) == "FIXES! Magnet works Now on Play Store Adapted for mobile Thanks"
+    assert clean_text("[h3][b]BALANCE[/b][/h3]This is [b]the big one[/b].") == "BALANCE: This is the big one."
 
 
 def test_sale_ads_and_press_are_not_updates():
@@ -98,7 +101,8 @@ def test_sale_ads_and_press_are_not_updates():
     assert not is_update(news("40% Off Sale Ending Soon!", 1))
     assert not is_update(news("Free Weekend starts now", 1))
     assert not is_update(news("Patch 1.2 reviewed", 1, official=False))
-    for promo in ("SIFU Mobile is OUT NOW!", "Devstream #198", "Vote for us at the Golden Joystick Awards"):
+    for promo in ("SIFU Mobile is OUT NOW!", "Devstream #198", "Vote for us at the Golden Joystick Awards",
+                  "Warframe Iceblade of Narin x Alienware"):
         assert not is_update(news(promo, 1)), promo
 
 
@@ -110,22 +114,25 @@ def test_recent_posts_put_developer_updates_first():
         news("Обзор обновления", 5, official=False),
         news("Old patch", 20),
     ]})
-    posts = recent_posts(client, 1, since=NOW - 14 * DAY, limit=3)
+    posts = recent_posts(client, 1, since=NOW - 14 * DAY, limit=3, always_press=True)
     assert [p.title for p in posts] == ["Update 2", "Review: still great"]
     assert [p.official for p in posts] == [True, False]
     assert posts[0].summary == "About Update 2."
 
 
-def test_recent_posts_skip_press_about_the_same_story():
-    client = NewsClient({1: [
-        news("Caves of Qud: Diaspora is coming December 9", 1, official=False),
-        news("Caves of Qud: Diaspora is coming December 9th", 2),
-        news("Monumentally expansive roguelike gets an expansion", 2, official=False),
-    ]})
-    posts = recent_posts(client, 1, since=NOW - 14 * DAY, limit=3)
-    assert [(p.title, p.official) for p in posts] == [
-        ("Caves of Qud: Diaspora is coming December 9th", True),
-        ("Monumentally expansive roguelike gets an expansion", False),
+def test_press_only_fills_in_when_the_developer_is_quiet():
+    client = NewsClient({
+        # The press write-up of an announcement is the same story under another headline.
+        1: [news("Diaspora is coming December 9th", 2),
+            news("Monumentally expansive roguelike gets an expansion", 2, official=False)],
+        2: [news("Caves of Qud: Diaspora is coming December 9", 1, official=False),
+            news("Caves of Qud: Diaspora is coming Dec 9", 1, official=False),
+            news("A review of the year", 3, official=False)],
+    })
+    since = NOW - 14 * DAY
+    assert [p.title for p in recent_posts(client, 1, since=since)] == ["Diaspora is coming December 9th"]
+    assert [p.title for p in recent_posts(client, 2, since=since)] == [
+        "Caves of Qud: Diaspora is coming December 9", "A review of the year",  # near-copies count once
     ]
 
 
@@ -202,15 +209,17 @@ def test_digest_suggests_a_backlog_game_when_nothing_you_stopped_has_updates():
 
 
 def test_a_failing_section_leaves_a_note_instead_of_failing_the_digest():
-    tools = FakeTools(NewsClient(), profile(notes=["Achievements are private."]))
+    tools = FakeTools(NewsClient(), profile(notes=["13 games had no SteamSpy tags."]))
     tools.picks = SteamAPIError("SteamSpy is down")
+    tools.gems = SteamAPIError("timed out")
     d = build_digest(tools, now=NOW)
-    assert d.picks == []
-    assert d.notes == ["Couldn't load recommendations: SteamSpy is down", "Achievements are private."]
+    assert d.picks == [] and d.gems == []
+    # The profile's caveats are left to the chat.
+    assert d.notes == ["Couldn't load recommendations: SteamSpy is down", "Couldn't load hidden gems: timed out"]
     md = to_markdown(d)
     assert "No picks this week." in md
     assert "You haven't played anything in the last two weeks." in md
-    assert "_Couldn't load recommendations: SteamSpy is down_\n\n_Achievements are private._" in md  # one paragraph each
+    assert "_Couldn't load recommendations: SteamSpy is down_\n\n_Couldn't load hidden gems: timed out_" in md
 
 
 def test_markdown_dates_and_more_updates():
@@ -220,3 +229,13 @@ def test_markdown_dates_and_more_updates():
     assert "_Wednesday, October 21, 2026_" in md
     assert "**Dropped RPG**: 50.5h, last played 200 days ago (likely abandoned). 1+ developer updates" in md
     assert "- Oct 1: [Patch 9](https://x/9)" in md
+
+
+def test_links_survive_spaces_and_long_headlines():
+    post = NewsPost("A" * 200, "2026-10-15", "https://steamstore-a.akamaihd.net/news/externalpost/Rock, Paper, Shotgun/1",
+                    "", False)
+    d = Digest(date(2026, 10, 21), [], [], [{"appid": 1, "game": "Qud", "hours_2_weeks": 3.7, "posts": [post]}],
+               None, None)
+    md = to_markdown(d)
+    assert "[Read more](https://steamstore-a.akamaihd.net/news/externalpost/Rock,%20Paper,%20Shotgun/1)" in md
+    assert "**" + "A" * 109 + "…**" in md

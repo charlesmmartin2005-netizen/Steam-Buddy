@@ -16,9 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from rich.console import Console
-from rich.markdown import Markdown
 
-from .agent import Agent, AgentError
 from .cache import Cache
 from .config import Config, ConfigError, load_config
 from .digest import build_digest, to_markdown
@@ -121,6 +119,8 @@ def _tool_runner(tools: SteamTools, out: _Output):
 
 
 def chat(cfg: Config, *, refresh: bool = False) -> int:
+    from .agent import Agent, AgentError  # the Anthropic SDK takes seconds to import; --digest doesn't need it
+
     with Cache(cfg.cache_path) as cache, SteamClient.from_config(cfg, cache=cache) as steam:
         if refresh:
             _clear_account_data(cache)
@@ -205,6 +205,8 @@ def digest(cfg: Config, *, refresh: bool = False, out: str | None = None) -> int
         path.write_text(text, encoding="utf-8")
         console.print(f"Saved your digest to [cyan]{path}[/]")
     else:
+        from rich.markdown import Markdown
+
         console.print(Markdown(text))
     return 0
 

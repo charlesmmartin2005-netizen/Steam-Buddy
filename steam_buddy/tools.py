@@ -437,7 +437,7 @@ class SteamTools:
         games = []
         for appid, name, hours in followed_games(self.client, self.profile()):
             try:
-                posts = [asdict(p) for p in recent_posts(self.client, appid, since=since, limit=3)]
+                posts = [asdict(p) for p in recent_posts(self.client, appid, since=since, limit=4, always_press=True)]
             except SteamAPIError as e:
                 games.append({"appid": appid, "name": name, "error": f"Steam request failed: {e}"})
                 continue

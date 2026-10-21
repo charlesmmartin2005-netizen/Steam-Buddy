@@ -11,9 +11,10 @@ import html
 import re
 import time
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 from datetime import date, datetime, timezone
+from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from .profile import DAY, DORMANT_DAYS, TasteProfile
 from .steam_client import NewsItem, SteamAPIError, SteamClient
@@ -27,13 +28,15 @@ NEWS_PER_GAME = 2
 NEWS_FETCH = 15  # posts fetched per game; developer posts are mixed in with press articles
 REVISIT_MIN_HOURS = 5  # stopped games worth suggesting you go back to
 REVISIT_CANDIDATES = 8  # how many of them get their news checked (one request each, cached an hour)
-SAME_STORY = 0.8  # titles this similar are one story (the developer's post and the press write-up)
+SAME_STORY = 0.8  # press headlines this similar are one story syndicated twice
+TITLE_CHARS = 110  # press headlines can run to a paragraph
 
 # Developer posts that don't change the game: sale ads ("40% Off Sale Ending Soon!"),
 # award campaigns, stream schedules, and news about mobile versions.
 _NOT_AN_UPDATE = re.compile(
     r"\bsale\b|\d+\s?%\s?off|\bdiscount|\bdeals?\b|\bbundle\b|\bfree weekend\b|\bvot(e|ing)\b|\bawards?\b"
-    r"|\bnominat|\bgiveaway|\bmerch|\b(dev|live)?stream\b|\bdevstream|\btwitch\b|\bmobile\b|\bios\b|\bandroid\b",
+    r"|\bnominat|\bgiveaway|\bmerch|\b(dev|live)?stream\b|\bdevstream|\btwitch\b|\bmobile\b|\bios\b|\bandroid\b"
+    r"|\s[x×]\s",  # brand tie-ins: "Iceblade of Narin x Alienware"
     re.I,
 )
 # Media and their contents, which would otherwise leave image URLs in the text.
@@ -54,7 +57,8 @@ def clean_text(text: str, limit: int = 400) -> str:
     text = _MEDIA.sub(" ", html.unescape(text or ""))
     text = _HEADING_END.sub(": ", text)
     text = " ".join(_TAG.sub(" ", text).split())
-    text = re.sub(r"([.!?:;,])\s*:(\s|$)", r"\1\2", text).strip(" :")  # "Fixes!:" or a heading with no text after it
+    text = re.sub(r"\s+([.,!?;:])(?=\s|$)", r"\1", text)  # "[b]The big one[/b]." left a space before the stop
+    text = re.sub(r"([.!?:;,]):(\s|$)", r"\1\2", text).strip(" :")  # "Fixes!:" or a heading with no text after it
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
@@ -87,21 +91,23 @@ class NewsPost:
         return cls(i.title, day, i.url, clean_text(i.contents, summary_len), i.official)
 
 
-def recent_posts(client: SteamClient, appid: int, *, since: float, limit: int = NEWS_PER_GAME) -> list[NewsPost]:
+def recent_posts(
+    client: SteamClient, appid: int, *, since: float, limit: int = NEWS_PER_GAME, always_press: bool = False
+) -> list[NewsPost]:
     """Posts since `since`: the developer's updates first, then press in a readable language.
 
-    A press article covering the same story as a post already picked is left out.
+    Press coverage is mostly about what the developer just announced, so it only
+    fills in when the developer posted nothing, unless `always_press`. Press
+    headlines that are near-copies of each other count once.
     """
     items = [i for i in client.get_news(appid, count=NEWS_FETCH) if i.date >= since]
     updates = [i for i in items if is_update(i)]
-    press = [i for i in items if not i.official and _mostly_latin(i.title)]
-    picked: list[NewsItem] = []
-    for i in updates + press:
-        if len(picked) == limit:
-            break
-        if not any(_same_story(i.title, p.title) for p in picked):
-            picked.append(i)
-    return [NewsPost.from_item(i) for i in picked]
+    press: list[NewsItem] = []
+    if always_press or not updates:
+        for i in items:
+            if not i.official and _mostly_latin(i.title) and not any(_same_story(i.title, p.title) for p in press):
+                press.append(i)
+    return [NewsPost.from_item(i) for i in (updates + press)[:limit]]
 
 
 def followed_games(client: SteamClient, profile: TasteProfile, n: int = FOLLOW_GAMES) -> list[tuple[int, str, float]]:
@@ -208,7 +214,8 @@ def build_digest(tools: SteamTools, *, now: float | None = None) -> Digest:
     backlog = None if revisit else attempt("your backlog", tools.best_backlog_game, None)
     if not revisit and not backlog and revisits:
         revisit = revisits[0]  # no updates anywhere, but still the best one to go back to
-    return Digest(date.fromtimestamp(now), picks, gems, news, revisit, backlog, notes + profile.notes)
+    # The profile's own caveats (games without tags or achievements) belong to the chat, not a weekly read.
+    return Digest(date.fromtimestamp(now), picks, gems, news, revisit, backlog, notes)
 
 
 # -- Markdown -------------------------------------------------------------------
@@ -216,6 +223,15 @@ def build_digest(tools: SteamTools, *, now: float | None = None) -> Digest:
 
 def _md(text: str) -> str:
     return re.sub(r"([\\`*_\[\]<>#|])", r"\\\1", text)
+
+
+def _link(text: str, url: str) -> str:
+    # Press URLs can hold spaces ("externalpost/Rock, Paper, Shotgun/..."), which break a Markdown link.
+    return f"[{_md(text)}]({quote(url, safe=':/?#@!$&*+,;=%~')})"
+
+
+def _title(t: str) -> str:
+    return t if len(t) <= TITLE_CHARS else t[: TITLE_CHARS - 1].rstrip() + "…"
 
 
 def _short_date(iso: str) -> str:
@@ -280,7 +296,7 @@ def to_markdown(d: Digest) -> str:
         for p in entry["posts"]:
             kind = "developer update" if p.official else "press"
             summary = f": {_md(p.summary)}" if p.summary else ""
-            out.append(f"- **{_md(p.title)}** ({_short_date(p.date)}, {kind}){summary} [Read more]({p.url})")
+            out.append(f"- **{_md(_title(p.title))}** ({_short_date(p.date)}, {kind}){summary} {_link('Read more', p.url)}")
         if not entry["posts"]:
             out.append(f"- Nothing new in the last {NEWS_DAYS} days.")
         out.append("")
@@ -294,7 +310,7 @@ def to_markdown(d: Digest) -> str:
             count = f"{len(r.updates)}{'+' if r.more_updates else ''}"
             noun = "update" if count == "1" else "updates"
             out += [f"{head} {count} developer {noun} since you stopped:", ""]
-            out += [f"- {_short_date(p.date)}: [{_md(p.title)}]({p.url})" for p in r.updates[:4]]
+            out += [f"- {_short_date(p.date)}: {_link(_title(p.title), p.url)}" for p in r.updates[:4]]
         else:
             out.append(f"{head} No developer updates since then, but it's the game you spent most time on "
                        "before stopping.")

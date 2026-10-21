@@ -101,10 +101,12 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
    - News posts carry `feed_type`/`feedname`, which say whether a post is the
      developer's own Steam announcement or a press article (`is_external_url` is
      true for both, so it can't tell them apart). Developer posts that don't
-     change the game (sale ads, award campaigns, stream schedules, mobile-version
-     news) don't count as updates. Press headlines that are mostly non-Latin
-     script are dropped, and so is a press story whose title nearly matches a
-     post already shown.
+     change the game (sale ads, award campaigns, stream schedules, brand tie-ins,
+     mobile-version news) don't count as updates. In the digest, press only
+     fills in for a game whose developer posted nothing, since it's mostly a
+     write-up of the same announcement; the chat's `get_recent_news` gets both.
+     Press headlines that are mostly non-Latin script are dropped, and
+     near-identical headlines count once.
    - News is fetched as full text (`maxlength=0`) and cleaned here: Steam's own
      short blurbs strip the BBCode without leaving spaces, so headings and
      sentences run together. Only the first 6,000 characters of each post are
@@ -121,6 +123,8 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
      never-played game that best fits your taste instead (if its match is at
      least 30 and it shares specific tags with a game you played). A section whose
      request fails is left empty with a note rather than failing the digest.
+     The `anthropic` SDK is only imported for the chat, which keeps a warm
+     `--digest` run to a few seconds.
      `--out FILE` saves it as Markdown (`{date}` in the name becomes the date).
    - Two new chat tools: `get_recent_news` and `get_games_to_revisit`;
      `get_game_news` results now say which posts are the developer's.

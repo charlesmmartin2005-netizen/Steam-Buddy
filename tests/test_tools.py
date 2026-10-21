@@ -340,7 +340,7 @@ def test_recent_news_covers_games_played_lately(tools, fake):
     assert out["days"] == 14
     game = out["games"][0]
     assert (game["name"], game["hours_last_2_weeks"]) == ("Rogue Runner", 5.0)
-    assert [p["title"] for p in game["posts"]] == ["Patch", "Review"]
+    assert [p["title"] for p in game["posts"]] == ["Patch", "Review"]  # the chat gets press coverage too
 
 
 def test_games_to_revisit_lists_updates_since_you_stopped(tools, fake):
