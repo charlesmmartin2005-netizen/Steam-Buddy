@@ -143,7 +143,8 @@ def chat(cfg: Config, *, refresh: bool = False) -> int:
                       "after that it's cached.[/]\n")
         while True:
             try:
-                question = console.input("[bold cyan]you>[/] ").strip()
+                # Windows PowerShell 5.1 starts piped input with a byte-order mark, which would hide "/quit".
+                question = console.input("[bold cyan]you>[/] ").lstrip("\ufeff").strip()
             except (EOFError, KeyboardInterrupt):
                 console.print()
                 return 0
