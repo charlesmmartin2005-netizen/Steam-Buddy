@@ -8,6 +8,7 @@ it's free, quick and fine to run on a schedule. tools.py exposes the news and
 from __future__ import annotations
 
 import html
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ NEWS_PER_GAME = 2
 NEWS_FETCH = 15  # posts fetched per game; developer posts are mixed in with press articles
 REVISIT_MIN_HOURS = 5  # stopped games worth suggesting you go back to
 REVISIT_CANDIDATES = 8  # how many of them get their news checked (one request each, cached an hour)
+BIG_UPDATE_HALF_LIFE = 30  # days: a big update this old pulls you back half as hard as one from today
 SAME_STORY = 0.8  # press headlines this similar are one story syndicated twice
 TITLE_CHARS = 110  # press headlines can run to a paragraph
 
@@ -35,11 +37,29 @@ TITLE_CHARS = 110  # press headlines can run to a paragraph
 # award campaigns, stream schedules, and news about mobile versions.
 _NOT_AN_UPDATE = re.compile(
     r"\bsale\b|\d+\s?%\s?off|\bdiscount|\bdeals?\b|\bbundle\b|\bfree weekend\b|\bvot(e|ing)\b|\bawards?\b"
-    r"|\bnominat|\bgiveaway|\bmerch|\b(dev|live)?stream\b|\bdevstream|\btwitch\b|\bmobile\b|\bios\b|\bandroid\b"
+    r"|\bnominat|\bgiveaway|\bmerch|\b(dev|live)?stream\b|\bdevstream|\btwitch\b"
     r"|\s[x×]\s",  # brand tie-ins: "Iceblade of Narin x Alienware"
     re.I,
 )
+# Mobile-version news, unless it's also about the PC game: "1.4.5.7 - Out Now for PC! (Console/Mobile soon)".
+_MOBILE = re.compile(r"\bmobile\b|\bios\b|\bandroid\b", re.I)
+_PC = re.compile(r"\bpc\b|\bsteam\b", re.I)
 # Media and their contents, which would otherwise leave image URLs in the text.
+# Developer posts that bring something new to play: a named update, an expansion, a new season...
+_BIG_UPDATE = re.compile(
+    r"\bupdate\b|\bexpansion\b|\bdlc\b|\bseason\b|\bchapter\b|\boverhaul|\brework|\blaunch(es|ed)?\b|\bnew\b"
+    r"|(?<![$£€\d.])\bv?\d+\.\d+",
+    re.I,
+)
+# Saying it has arrived settles it, even next to "console version coming soon".
+_ARRIVED = re.compile(r"\bout now\b|\bnow (available|live)\b|\bis (live|here|out)\b", re.I)
+# ...but not news of one that hasn't arrived yet, routine patches, or the soundtrack.
+_NOT_BIG = re.compile(
+    r"hotfix|preview|sneak peek|teaser|trailer|roadmap|coming|\bsoon\b|overview|devlog|dev ?update|dev diary"
+    r"|state of the|behind the scenes|q ?& ?a|survey|soundtrack|\bost\b|single release|release date|store update"
+    r"|stable (update|release)|monthly|maintenance|known issues|\bservers?\b",
+    re.I,
+)
 _MEDIA = re.compile(
     r"\[(img|previewyoutube|video)\b[^\]]*\].*?\[/\1\]|\[img\b[^\]]*\]|<(img|video|iframe)\b[^>]*>|\{STEAM_CLAN_IMAGE\}\S*",
     re.I | re.S,
@@ -64,7 +84,14 @@ def clean_text(text: str, limit: int = 400) -> str:
 
 def is_update(item: NewsItem) -> bool:
     """A post by the developer that changes the game, so not a sale ad or a stream schedule."""
-    return item.official and not _NOT_AN_UPDATE.search(item.title)
+    t = item.title
+    return item.official and not _NOT_AN_UPDATE.search(t) and not (_MOBILE.search(t) and not _PC.search(t))
+
+
+def is_big_update(item: NewsItem) -> bool:
+    """An update that adds something to play: new content, an expansion, a named update. Judged by its title."""
+    t = item.title
+    return is_update(item) and bool(_ARRIVED.search(t) or (_BIG_UPDATE.search(t) and not _NOT_BIG.search(t)))
 
 
 def _same_story(a: str, b: str) -> bool:
@@ -84,11 +111,12 @@ class NewsPost:
     url: str
     summary: str
     official: bool  # the developer's own announcement, not press
+    big_update: bool = False  # new content, an expansion or a named update, going by the title
 
     @classmethod
     def from_item(cls, i: NewsItem, summary_len: int = 300) -> NewsPost:
         day = datetime.fromtimestamp(i.date, timezone.utc).strftime("%Y-%m-%d")
-        return cls(i.title, day, i.url, clean_text(i.contents, summary_len), i.official)
+        return cls(i.title, day, i.url, clean_text(i.contents, summary_len), i.official, is_big_update(i))
 
 
 def recent_posts(
@@ -124,14 +152,23 @@ class Revisit:
     hours: float
     last_played_days_ago: int
     why_stopped: str  # how the profile sees it
-    updates: list[NewsPost]  # developer updates since you last played, newest first
+    updates: list[NewsPost]  # developer updates since you last played: big ones first, then newest first
     more_updates: bool  # every post fetched was newer, so there are probably more
+    pull: float = 0.0  # how strongly a recent big update calls you back; 0 without one
 
 
 def revisit_candidates(
     client: SteamClient, profile: TasteProfile, now: float, n: int = REVISIT_CANDIDATES
 ) -> list[Revisit]:
-    """Games you put real time into and stopped, those with updates since you left first."""
+    """Games you put real time into and stopped, the ones with the strongest reason to go back first.
+
+    A big update since you left counts most, and the newer it is the more it
+    counts (half as much after BIG_UPDATE_HALF_LIFE days). Your hours only add a
+    little on top (logarithmically), so a fresh expansion for a 100-hour game
+    beats a music single for a 300-hour one. After those come games with any
+    update, then the rest, by hours. Updates are counted since you last played,
+    not since the last digest, so a skipped week loses nothing.
+    """
     finished = {g.appid for g in profile.completed}
     seen: set[int] = set()
     pool = []
@@ -158,10 +195,15 @@ def revisit_candidates(
         except SteamAPIError:
             items = []
         newer = [i for i in items if i.date >= since]
-        updates = [NewsPost.from_item(i, 200) for i in newer if is_update(i)]
+        big = [i.date for i in newer if is_big_update(i)]
+        pull = 0.0
+        if big:
+            age_days = max(0.0, now - max(big)) / DAY
+            pull = 0.5 ** (age_days / BIG_UPDATE_HALF_LIFE) * (1 + math.log(g.hours / REVISIT_MIN_HOURS))
+        updates = sorted((NewsPost.from_item(i, 200) for i in newer if is_update(i)), key=lambda p: not p.big_update)
         out.append(Revisit(g.appid, g.name, g.hours, g.last_played_days_ago, why, updates,
-                           more_updates=bool(items) and len(newer) == len(items)))
-    out.sort(key=lambda r: (not r.updates, -r.hours))
+                           more_updates=bool(items) and len(newer) == len(items), pull=round(pull, 2)))
+    out.sort(key=lambda r: (-r.pull, not r.updates, -r.hours))
     return out
 
 

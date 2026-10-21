@@ -7,6 +7,7 @@ from steam_buddy.digest import (
     Revisit,
     build_digest,
     clean_text,
+    is_big_update,
     is_update,
     recent_posts,
     revisit_candidates,
@@ -104,6 +105,48 @@ def test_sale_ads_and_press_are_not_updates():
     for promo in ("SIFU Mobile is OUT NOW!", "Devstream #198", "Vote for us at the Golden Joystick Awards",
                   "Warframe Iceblade of Narin x Alienware"):
         assert not is_update(news(promo, 1)), promo
+
+
+def test_big_updates_add_something_to_play():
+    for title in ("Completely New Enemy AI Is Here", "The Overload Update", "FROZEN TRAIL - 2.0 Update",
+                  "Terraria 1.4.5.7 - Out Now for PC! (Console/Mobile Soon)", "The Icebind is live now!",
+                  "Season 10.5: New Modes and Halloween"):
+        assert is_big_update(news(title, 1)), title
+    for title in ('"Devourer" Single Release', "Baro Ki'Teer Returns", "October Update Preview", "Hotfix 2.1.1",
+                  "Dev Update: Meta Control and ChessBox", "Terraria State of the Game - September 2026",
+                  "Diaspora is coming December 9th", "Store Update 2.2.0", "40% Off: new low price",
+                  "Marvel Rivals Version 20261015 Patch Notes", "October 2026 Stable Update",
+                  "Charting the Unknown DLC Features Overview", "SIFU Mobile is OUT NOW!"):
+        assert not is_big_update(news(title, 1)), title
+    assert not is_big_update(news("The Overload Update", 1, official=False))  # press
+
+
+def test_revisit_prefers_a_fresh_big_update_over_more_hours():
+    prof = profile(most_played=[
+        GameSummary(1, "Big Live Game", 303, 211),
+        GameSummary(2, "Extraction Game", 132, 265),
+        GameSummary(3, "Sandbox Game", 169, 236),
+        GameSummary(4, "Quiet Game", 400, 300),
+    ])
+    client = NewsClient({
+        1: [news('"Devourer" Single Release', 2), news("Baro Ki'Teer Returns", 5), news("The Icebind is live now!", 40)],
+        2: [news("Completely New Enemy AI Is Here", 5), news("October Update Preview", 3)],
+        3: [news("Terraria 1.4.5.7 - Out Now for PC!", 63)],
+        4: [news("Ancient patch", 400)],
+    })
+    out = revisit_candidates(client, prof, NOW)
+    assert [r.name for r in out] == ["Extraction Game", "Big Live Game", "Sandbox Game", "Quiet Game"]
+    assert out[0].pull > out[1].pull > out[2].pull > 0 == out[3].pull
+    # Big updates are listed first.
+    assert [p.title for p in out[1].updates] == ["The Icebind is live now!", '"Devourer" Single Release',
+                                                  "Baro Ki'Teer Returns"]
+    assert out[1].updates[0].big_update and not out[1].updates[1].big_update
+
+
+def test_revisit_hours_break_a_tie_between_equally_fresh_updates():
+    prof = profile(most_played=[GameSummary(1, "Short Game", 10, 200), GameSummary(2, "Long Game", 200, 200)])
+    client = NewsClient({1: [news("The Big Update", 3)], 2: [news("The Big Update", 3)]})
+    assert [r.name for r in revisit_candidates(client, prof, NOW)] == ["Long Game", "Short Game"]
 
 
 def test_recent_posts_put_developer_updates_first():

@@ -192,8 +192,11 @@ The digest has:
   (press mostly re-reports announcements). Sale ads, award campaigns, stream
   schedules, brand tie-ins and mobile-version news don't count as updates.
 - **Worth going back to**: a game you put real time into and stopped, preferring
-  one that's had developer updates since you left. If none has, it suggests the
-  game in your backlog that best fits your taste, when one fits well enough.
+  one with a recent big update (new content, an expansion, a named patch) since
+  you left. The fresher the update the more it counts; your hours count a
+  little. Updates are counted since you last played, so skipping a week loses
+  nothing. If nothing you stopped has updates, it suggests the game in your
+  backlog that best fits your taste, when one fits well enough.
 
 It's built straight from your Steam data without asking Claude, so it doesn't
 need an Anthropic key and costs nothing to run. `{date}` in the `--out` name
@@ -210,14 +213,13 @@ $dir = "C:\path\to\Steam Buddy"
 $action = New-ScheduledTaskAction -Execute "$dir\.venv\Scripts\python.exe" `
     -Argument '-m steam_buddy.main --digest --out "digests\{date}.md"' -WorkingDirectory $dir
 $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 10am
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 Register-ScheduledTask -TaskName "Steam Buddy digest" -Action $action -Trigger $trigger -Settings $settings
 ```
 
-Every Sunday at 10am (or as soon as the PC is on, if it was off then) a window
-opens while it runs, usually under a minute, and the digest lands in the
-`digests` folder. The
-working directory matters: it's where Steam Buddy finds your `.env`. To try it
+Every Sunday at 10am (or as soon as the PC is on, if it was off then, and on
+battery too) a window opens for a few seconds and the digest lands in the
+`digests` folder. The working directory matters: it's where Steam Buddy finds your `.env`. To try it
 straight away, run `Start-ScheduledTask "Steam Buddy digest"`; to remove it,
 `Unregister-ScheduledTask "Steam Buddy digest"`.
 
