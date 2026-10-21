@@ -89,6 +89,7 @@ class LibraryData:
     achievements: dict[int, AchievementProgress | None]
     now: float
     notes: list[str] = field(default_factory=list)
+    achievements_private: bool = False
 
 
 @dataclass
@@ -201,7 +202,14 @@ def gather(
             f"Most common error ({count}x): {reason}"
         )
 
-    return LibraryData(games=games, tags=tags, achievements=achievements, now=now or time.time(), notes=notes)
+    return LibraryData(
+        games=games,
+        tags=tags,
+        achievements=achievements,
+        now=now or time.time(),
+        notes=notes,
+        achievements_private=private > 0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +324,7 @@ def build_profile(data: LibraryData) -> TasteProfile:
         elif ach and ach.percent < ABANDONED_PCT and (days is None or days >= DORMANT_DAYS):
             abandoned.append(g)
     no_ach = sum(1 for g in engaged if data.achievements.get(g.appid) is None)
-    if no_ach:
+    if no_ach and not data.achievements_private:  # the privacy note already explains it
         notes.append(
             f"{no_ach} of the games you've played have no achievement data, so they can't be "
             "judged finished or abandoned."

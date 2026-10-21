@@ -192,3 +192,5 @@ def test_gather_explains_private_achievements_and_stops_asking():
     note = next(n for n in gathered.notes if "aren't public" in n)
     assert "Game details" in note and "steamcommunity.com/my/edit/settings" in note
     assert not any("Couldn't read" in n for n in gathered.notes)
+    # One clear explanation, not a second vaguer note about missing data.
+    assert not any("no achievement data" in n for n in build_profile(gathered).notes)
