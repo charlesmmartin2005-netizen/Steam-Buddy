@@ -22,8 +22,8 @@ from .recommend import (
     SHORTLIST,
     Scored,
     closest_played,
-    cosine,
     game_vector,
+    match_score,
     rank,
     reason_tags,
     seed_tags,
@@ -400,7 +400,7 @@ class SteamTools:
                 "tags": list(_game_tags(info))[:REASON_TAGS],
                 **({"tags_from": "store genres; SteamSpy has no user tags for it"}
                    if info and info.source != "steamspy" else {}),
-                "match": round(100 * cosine(target, game_vector(info))) if info and info.tags else None,
+                "match": round(100 * match_score(target, game_vector(info))) if info and info.tags else None,
                 "reviews": None if not reviews else {
                     "summary": reviews.description, "positive_pct": round(reviews.positive_pct, 1),
                     "total": reviews.total,

@@ -6,6 +6,7 @@ from steam_buddy.recommend import (
     cosine,
     game_vector,
     is_early_access,
+    match_score,
     rank,
     reason_tags,
     seed_tags,
@@ -48,12 +49,12 @@ def test_rank_scores_closer_matches_higher():
     target = {"roguelike": 0.7, "pixelgraphics": 0.3}
     pool = {1: game(1), 2: game(2)}
     tags = {
-        1: info(1, {"Rogue-like": 10, "Pixel Graphics": 5}),
-        2: info(2, {"Racing": 10, "Rogue-like": 2}),
+        1: info(1, {"Rogue-like": 10, "Pixel Graphics": 6, "Difficult": 2, "Permadeath": 2, "Top-Down": 2}),
+        2: info(2, {"Racing": 10, "Rogue-like": 2, "Cars": 2, "Arcade": 2, "Driving": 2}),
     }
     ranked = rank(pool, {1: ["Rogue-like"], 2: ["Rogue-like"]}, target, tags.__getitem__)
     assert [s.game.appid for s in ranked] == [1, 2]
-    assert ranked[0].match > 0.9
+    assert ranked[0].match > 0.8 > 0.3 > ranked[1].match
 
 
 def test_rank_penalises_tags_you_drop_and_skips_software():
@@ -88,7 +89,8 @@ def test_failed_tag_lookup_falls_back_to_the_list_it_came_from():
         raise SteamAPIError("SteamSpy down")
 
     ranked = rank({1: game(1)}, {1: ["Rogue-like"]}, {"roguelike": 1.0}, get_tags)
-    assert ranked[0].match == pytest.approx(1.0)
+    # A perfect fit on one tag, but one tag is thin evidence, so the match is scaled down.
+    assert ranked[0].match == pytest.approx(0.2)
 
 
 def test_early_access_and_shared_tags():
@@ -107,16 +109,19 @@ def test_reasons_prefer_specific_tags_and_only_cite_top_tags():
 
 
 def test_closest_played_weighs_similarity_by_hours():
-    candidate = info(1, {"Bullet Hell": 10, "Action Roguelike": 8})
     played = [
         (OwnedGame(10, "Tiny Rogues", 9000, 0, None), game_vector(info(10, {"Bullet Hell": 10, "Action Roguelike": 9}))),
-        (OwnedGame(11, "Short Clone", 90, 0, None), game_vector(info(11, {"Bullet Hell": 10, "Action Roguelike": 8}))),
-        (OwnedGame(12, "Big Sim", 50000, 0, None), game_vector(info(12, {"Farming Sim": 10}))),
+        (OwnedGame(11, "Clone", 600, 0, None), game_vector(info(11, {"Bullet Hell": 10, "Action Roguelike": 8}))),
+        (OwnedGame(12, "Dropped Clone", 180, 0, None), game_vector(info(12, {"Bullet Hell": 10}))),  # 3 hours
+        (OwnedGame(13, "Big Sim", 50000, 0, None), game_vector(info(13, {"Farming Sim": 10}))),
+        # Shares only umbrella tags with the candidate, however many hours it has.
+        (OwnedGame(14, "Big Action", 50000, 0, None), game_vector(info(14, {"Action": 10, "RPG": 5}))),
     ]
+    candidate = info(1, {"Bullet Hell": 10, "Action Roguelike": 8, "Action": 6})
     out = closest_played(candidate, played)
     assert [(g.name, tags) for g, tags in out] == [
         ("Tiny Rogues", ["Bullet Hell", "Action Roguelike"]),
-        ("Short Clone", ["Bullet Hell", "Action Roguelike"]),
+        ("Clone", ["Bullet Hell", "Action Roguelike"]),
     ]
 
 
@@ -124,3 +129,10 @@ def test_store_feature_categories_are_not_taste():
     i = TagInfo(1, {"Action": 1, "DualShock Controller Support": 1, "Xbox Controller Support": 1,
                     "Steam Leaderboards": 1}, "store")
     assert game_vector(i) == {"action": 1.0}
+
+
+def test_specific_overlap_beats_umbrella_overlap():
+    target = {"action": 0.5, "bullethell": 0.5}
+    umbrella = game_vector(info(1, {"Action": 10, "A": 5, "B": 5, "C": 5, "D": 5}))
+    specific = game_vector(info(2, {"Bullet Hell": 10, "A": 5, "B": 5, "C": 5, "D": 5}))
+    assert match_score(target, specific) > match_score(target, umbrella)

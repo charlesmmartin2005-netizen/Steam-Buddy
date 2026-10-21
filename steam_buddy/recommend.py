@@ -28,6 +28,9 @@ TASTE_TAGS = 30  # how many of your top tags make up your taste vector
 DROP_PENALTY = 0.1  # score lost per tag you tend to drop among a game's top 5
 REASON_TAGS = 6  # reasons only cite a game's top tags, the ones that say what it is
 CLOSEST_MIN = 0.3  # a game you played must be at least this similar to be cited as a reason
+CITE_MIN_HOURS = 5  # ...and played at least this long; citing a game you dropped hurts the case
+BROAD_WEIGHT = 0.5  # umbrella tags count half when matching, so specific overlap decides
+FULL_CONFIDENCE_TAGS = 5  # games with fewer tags than this get a proportionally lower match
 
 # Umbrella tags carried by tens of thousands of games (Action: ~39,000). They still
 # count when scoring, but a pool seeded from them is mostly noise.
@@ -75,6 +78,27 @@ def cosine(a: dict[str, float], b: dict[str, float]) -> float:
     return dot / norm if norm else 0.0
 
 
+def _damp_broad(v: dict[str, float]) -> dict[str, float]:
+    return {k: w * (BROAD_WEIGHT if k in _BROAD else 1.0) for k, w in v.items()}
+
+
+def _specific(v: dict[str, float]) -> dict[str, float]:
+    return {k: w for k, w in v.items() if k not in _BROAD}
+
+
+def match_score(target: dict[str, float], vector: dict[str, float]) -> float:
+    """0-1: how closely a game's tags fit the target.
+
+    A game with one or two tags (often store genres, when SteamSpy has none)
+    can look like a perfect fit on "Action" alone, so fewer than
+    FULL_CONFIDENCE_TAGS tags scale the match down.
+    """
+    if not vector:
+        return 0.0
+    confidence = min(1.0, len(vector) / FULL_CONFIDENCE_TAGS)
+    return cosine(_damp_broad(target), _damp_broad(vector)) * confidence
+
+
 def is_early_access(info: TagInfo | None) -> bool:
     return bool(info) and any(tag_key(t) == "earlyaccess" for t in list(normalize_tags(info.tags))[:20])
 
@@ -120,7 +144,7 @@ def rank(
         if _is_software(info):
             continue
         vector = game_vector(info) or {tag_key(t): 1.0 for t in found_under.get(g.appid, [])}
-        match = cosine(target, vector)
+        match = match_score(target, vector)
         drops = [t for t in list(_game_tags(info))[:5] if tag_key(t) in avoid]
         score = match * (0.5 + 0.5 * wilson_lower(g.positive, g.reviews)) - DROP_PENALTY * len(drops)
         scored.append(Scored(g, info, match, score, drops, is_early_access(info)))
@@ -142,13 +166,17 @@ def closest_played(
 ) -> list[tuple[OwnedGame, list[str]]]:
     """The games you played that are most like this one.
 
-    Similarity counts most (squared), then your hours, so a near-identical game
-    you played for 100 hours beats a loosely similar one you played for 200.
+    Only specific tags count here: sharing "Action" with a 300-hour game doesn't
+    make it a reason. Similarity counts most (squared), then your hours, so a
+    near-identical game you played for 100 hours beats a loosely similar one you
+    played for 200. Games under CITE_MIN_HOURS aren't cited.
     """
-    vector = game_vector(info)
+    vector = _specific(game_vector(info))
     scored = []
     for g, gv in played:
-        sim = cosine(vector, gv)
+        if g.hours < CITE_MIN_HOURS:
+            continue
+        sim = cosine(vector, _specific(gv))
         if sim >= CLOSEST_MIN:
             scored.append((sim * sim * math.sqrt(g.hours), g, gv))
     scored.sort(key=lambda x: -x[0])

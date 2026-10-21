@@ -85,8 +85,13 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
      fetched and are scored by cosine similarity between their tags and your taste
      vector (your top 30 tags, as shares of playtime-weighted play), times review
      confidence, minus 0.1 for each tag you tend to drop among their top five.
-   - Every result explains itself: `because_you_played` (shared tags and your games
-     behind them), `tags_you_tend_to_drop`, `early_access`, `session_style`.
+     Umbrella tags count half, and games with fewer than five tags get a
+     proportionally lower match (one "Action" tag isn't evidence of a fit).
+   - Every result explains itself: `because_you_played` names your most similar
+     played games (specific tags only, at least 5 hours played) and the tags they
+     share; also `fits_your_tags`, `tags_you_tend_to_drop`, `early_access`,
+     `session_style`. Prices come live from the store in one batched request,
+     since SteamSpy's can be days old; review counts are still SteamSpy's.
    - New `recommend_games` tool (optional price cap); `find_hidden_gems` searches
      your own top tags when no tags are given; `find_similar_games` scores against
      all of the source game's tags; wishlist items get tags, reviews and a match.
