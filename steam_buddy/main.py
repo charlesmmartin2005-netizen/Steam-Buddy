@@ -5,6 +5,7 @@
     python -m steam_buddy.main --check    validate .env
     python -m steam_buddy.main --digest   weekly digest (no Claude call, so it's free)
     python -m steam_buddy.main --digest --out digests/{date}.md   save it instead of printing
+    python -m steam_buddy.main --web      the app in its own window (chat messages call Claude)
 """
 
 from __future__ import annotations
@@ -217,19 +218,24 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--check", action="store_true", help="validate your .env setup")
     group.add_argument("--digest", action="store_true", help="print your weekly digest (no Claude call)")
+    group.add_argument("--web", action="store_true", help="open the app in a window of its own")
     parser.add_argument("--out", metavar="FILE", help="with --digest: save it as Markdown instead; "
                         "{date} in the name becomes today's date")
+    parser.add_argument("--port", type=int, default=None, help="with --web: the local port (default 8765)")
+    parser.add_argument("--no-open", action="store_true", help="with --web: don't open a window")
     parser.add_argument("--refresh", action="store_true", help="re-fetch your library, wishlist and prices first")
     args = parser.parse_args(argv)
     if args.out and not args.digest:
         parser.error("--out only works with --digest")
+    if (args.port is not None or args.no_open) and not args.web:
+        parser.error("--port and --no-open only work with --web")
     # Keep library loggers quiet; the client never logs keys, but stray debug output clutters the chat.
     logging.basicConfig(level=logging.WARNING)
 
     if args.check:
         return check_setup()
     try:
-        cfg = load_config(require_anthropic=not args.digest)
+        cfg = load_config(require_anthropic=not (args.digest or args.web))
     except ConfigError as e:
         console.print("[bold red]Setup isn't complete yet:[/]")
         for problem in e.problems:
@@ -237,6 +243,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     if args.digest:
         return digest(cfg, refresh=args.refresh, out=args.out)
+    if args.web:
+        from .web import DEFAULT_PORT, serve
+
+        return serve(cfg, port=args.port or DEFAULT_PORT, open_browser=not args.no_open, refresh=args.refresh,
+                     clear_account_data=_clear_account_data)
     return chat(cfg, refresh=args.refresh)
 
 

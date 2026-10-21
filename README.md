@@ -230,3 +230,34 @@ Add a line like this with `crontab -e`:
 ```
 0 10 * * 0 cd /path/to/steam-buddy && .venv/bin/python -m steam_buddy.main --digest --out "digests/{date}.md"
 ```
+
+## 9. The app (web UI)
+
+```
+python -m steam_buddy.main --web                # opens in a window of its own
+python -m steam_buddy.main --web --refresh      # re-fetch your account data first
+python -m steam_buddy.main --web --port 8800 --no-open
+```
+
+This runs a small server on your computer only (`http://127.0.0.1:8765/`) and
+opens it in an Edge app window, or your default browser if Edge isn't found.
+Ctrl+C in the terminal stops it. Four screens:
+
+- **Home**: the games you're playing as story circles (a green ring means news
+  from the developer in the last two weeks), the game most worth going back to,
+  your top picks and hidden gems as cover-art tiles, recent activity and your
+  wishlist.
+- **Feed**: developer updates for what you're playing, and what changed in the
+  game worth going back to, as posts with the game's art.
+- **Picks**: one card per recommendation, with its match score, reviews, price
+  and the games of yours it's like.
+- **Chat**: the same chat as the terminal. Only this screen calls Claude.
+
+The home screen is built from the same data as the digest, so it's free and
+reused for 15 minutes; the refresh button in Activity rebuilds it. Game art
+loads in the browser straight from Steam's image servers.
+
+The server only answers requests addressed to `127.0.0.1` or `localhost`, and
+every API call needs a token that's made fresh at each launch and only appears
+in the page it serves, so other websites can't use it to run up your Anthropic
+bill. Your keys never leave the server.
