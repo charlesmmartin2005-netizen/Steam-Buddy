@@ -19,7 +19,7 @@ from steam_buddy.tools import (
     TOOL_DEFINITIONS,
     TOOL_SCHEMAS,
     SteamTools,
-    _clean_news,
+    _clean_text,
     _wilson_lower,
 )
 
@@ -237,13 +237,18 @@ def test_schemas_match_tool_methods():
         assert schema["additionalProperties"] is False
 
 
-def test_clean_news_strips_markup():
+def test_clean_text_strips_markup():
     raw = "[h1]Patch 1.2[/h1]<p>Fixed &amp; improved [url=https://x]stuff[/url]</p>"
-    assert _clean_news(raw) == "Patch 1.2 Fixed & improved stuff"
-    assert _clean_news("word " * 200, limit=20).endswith("…")
+    assert _clean_text(raw) == "Patch 1.2 Fixed & improved stuff"
+    assert _clean_text("word " * 200, limit=20).endswith("…")
 
 
 def test_wilson_rewards_more_reviews_at_the_same_score():
     assert _wilson_lower(90, 100) < _wilson_lower(900, 1000)
     assert _wilson_lower(10, 10) < _wilson_lower(950, 1000)
     assert _wilson_lower(0, 0) == 0
+
+
+def test_game_details_description_is_plain_text(tools, fake):
+    fake.get_app_details = lambda appid, **kw: details(appid, "HOLE", short_description="Casual &amp; Hard <b>FPS</b>")
+    assert call(tools, "get_game_details", appid=5)["description"] == "Casual & Hard FPS"

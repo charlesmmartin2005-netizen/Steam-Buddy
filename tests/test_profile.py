@@ -219,3 +219,20 @@ def test_few_achievements_and_live_service_games_get_no_verdict():
     assert names(p.abandoned) == {"Story Game"}
     assert names(p.stopped_endless) == {"Hero Brawl Online"}
     assert not any(" 1 games" in n for n in p.notes)
+
+
+def test_bounced_tags_leave_out_tags_you_play_a_lot():
+    now = 1_800_000_000
+    old = now - 200 * DAY
+    games = [
+        OwnedGame(1, "Big Strategy", 30_000, 0, old),
+        OwnedGame(2, "Dull Strategy", 20, 0, old),
+        OwnedGame(3, "Spooky Strategy", 30, 0, old),
+    ]
+    tags = {
+        1: TagInfo(1, {"Strategy": 10}, "steamspy"),
+        2: TagInfo(2, {"Strategy": 10, "Horror": 5}, "steamspy"),
+        3: TagInfo(3, {"Strategy": 10, "Horror": 5}, "steamspy"),
+    }
+    p = build_profile(LibraryData(games, tags, {}, now))
+    assert p.bounced_tags == ["Horror"]

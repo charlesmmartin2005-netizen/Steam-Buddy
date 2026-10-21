@@ -64,8 +64,8 @@ def _days_ago(ts: int | None) -> int | None:
     return max(0, int((datetime.now(timezone.utc).timestamp() - ts) // 86400))
 
 
-def _clean_news(text: str, limit: int = 400) -> str:
-    """Strip HTML and Steam's BBCode from a news excerpt."""
+def _clean_text(text: str, limit: int = 400) -> str:
+    """Strip HTML, entities and Steam's BBCode from store and news text."""
     text = re.sub(r"<[^>]+>|\[/?[a-zA-Z0-9*]+(=[^\]]*)?\]", " ", html.unescape(text or ""))
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
@@ -165,7 +165,7 @@ class SteamTools:
             "appid": appid,
             "name": details.name,
             "type": details.type,
-            "description": details.short_description,
+            "description": _clean_text(details.short_description, limit=600),
             "tags": list(tags.tags)[:12],
             "session_style": session_fit(tags),
             "genres": details.genres,
@@ -288,7 +288,7 @@ class SteamTools:
                     "date": datetime.fromtimestamp(i.date, timezone.utc).strftime("%Y-%m-%d"),
                     "source": i.feedlabel,
                     "url": i.url,
-                    "summary": _clean_news(i.contents),
+                    "summary": _clean_text(i.contents),
                 }
                 for i in items
             ],

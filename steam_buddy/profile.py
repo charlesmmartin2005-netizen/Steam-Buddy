@@ -41,6 +41,7 @@ ABANDONED_PCT = 30  # dormant and below this: likely abandoned
 MIN_ACHIEVEMENTS = 5  # fewer than this and the percentage says little (CS2 has 1)
 RECENT_DAYS = 60  # window for "recent trends"
 TAGS_PER_GAME = 10  # only a game's strongest tags count toward your profile
+TOP_TAGS = 15  # tags this high in your profile never count as ones you bounce off
 PRIVATE_STOP_AFTER = 5  # this many "profile is not public" answers in a row: stop asking
 
 # Tag sets below are matched by tag_key(), so spelling variants like
@@ -127,7 +128,7 @@ class TasteProfile:
     top_tags: list[TagScore]
     most_played: list[GameSummary]
     bounced: list[GameSummary]
-    bounced_tags: list[str]  # tags shared by 2+ games you bounced off
+    bounced_tags: list[str]  # tags shared by 2+ games you bounced off, minus your top tags
     active: list[GameSummary]
     completed: list[GameSummary]
     abandoned: list[GameSummary]
@@ -335,8 +336,14 @@ def build_profile(data: LibraryData) -> TasteProfile:
     engaged_scores = _score_tags(engaged, data.tags)
     tag_scores = sorted(engaged_scores.values(), key=lambda s: -s.score)
 
+    # Tags you keep dropping, leaving out any you also play a lot: bouncing off two
+    # strategy games says little if strategy is one of your biggest genres.
     bounced_scores = _score_tags(bounced, data.tags)
-    bounced_tags = [s.tag for s in sorted(bounced_scores.values(), key=lambda s: -s.games) if s.games >= 2][:8]
+    liked = {k for k, _ in sorted(engaged_scores.items(), key=lambda kv: -kv[1].score)[:TOP_TAGS]}
+    bounced_tags = [
+        s.tag for k, s in sorted(bounced_scores.items(), key=lambda kv: -kv[1].games)
+        if s.games >= 2 and k not in liked
+    ][:8]
 
     # Status of each game you stuck with.
     active, completed, abandoned, stopped_endless = [], [], [], []
