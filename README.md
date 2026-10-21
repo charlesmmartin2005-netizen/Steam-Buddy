@@ -188,10 +188,12 @@ The digest has:
   with the games of yours it's most like.
 - **Hidden gems**: two highly rated, lesser-known games (not repeats of the picks).
 - **News** for the games you've played most in the last two weeks: the
-  developer's own updates first (sale ads left out), then press coverage.
+  developer's own updates first, then press coverage. Sale ads, award
+  campaigns, stream schedules and mobile-version news don't count as updates,
+  and a press story about the same thing as a developer post isn't repeated.
 - **Worth going back to**: a game you put real time into and stopped, preferring
   one that's had developer updates since you left. If none has, it suggests the
-  game in your backlog that best fits your taste.
+  game in your backlog that best fits your taste, when one fits well enough.
 
 It's built straight from your Steam data without asking Claude, so it doesn't
 need an Anthropic key and costs nothing to run. `{date}` in the `--out` name

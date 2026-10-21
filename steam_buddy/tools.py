@@ -47,6 +47,7 @@ log = logging.getLogger(__name__)
 MAX_TAGS_PER_QUERY = 3  # each tag is one SteamSpy request (1/second, cached a week)
 MAX_RESULTS = 15
 BACKLOG_CHECK = 40  # never-played games whose tags best_backlog_game reads (cached a week)
+BACKLOG_MIN_MATCH = 0.3  # below this, no backlog game is suggested: a weak fit isn't worth naming
 
 
 def _int(value: Any, name: str, *, lo: int, hi: int, default: int | None = None) -> int:
@@ -394,9 +395,12 @@ class SteamTools:
             m = match_score(target, game_vector(info))
             if best is None or m > best[0]:
                 best = (m, g, info)
-        if best is None:
+        if best is None or best[0] < BACKLOG_MIN_MATCH:
             return None
         m, g, info = best
+        because = self._because(info)
+        if not because:
+            return None
         return {
             "appid": g.appid,
             "name": g.name,
@@ -405,13 +409,13 @@ class SteamTools:
             "tags": list(_game_tags(info))[:REASON_TAGS],
             "session_style": session_fit(info),
             "fits_your_tags": reason_tags(info, target),
-            "because_you_played": self._because(info),
+            "because_you_played": because,
         }
 
     def get_game_news(self, appid: Any, count: Any = None) -> dict[str, Any]:
         appid = _int(appid, "appid", lo=1, hi=10**8)
         n = _int(count, "count", lo=1, hi=10, default=3)
-        items = self.client.get_news(appid, count=n, maxlength=600)
+        items = self.client.get_news(appid, count=n)
         return {
             "appid": appid,
             "news": [
@@ -442,7 +446,7 @@ class SteamTools:
             "days": d,
             "games": games,
             "note": "Games played in the last two weeks, most hours first. official=true is the developer's own "
-                    "announcement (sale ads left out); the rest is press coverage.",
+                    "post (sale ads, award campaigns, streams and mobile news left out); the rest is press.",
         }
 
     def get_games_to_revisit(self, max_results: Any = None) -> dict[str, Any]:
@@ -640,7 +644,8 @@ TOOL_DESCRIPTIONS = {
     "get_game_news": "Latest news posts and patch notes for one game. official=true marks the developer's own "
                      "announcements; the rest is press.",
     "get_recent_news": "News for the games the user played in the last two weeks: the developer's updates "
-                       "first (sale ads left out), then press. Use it for \"what's new in my games?\".",
+                       "first (sale ads, streams and mobile news left out), then press. Use it for "
+                       "\"what's new in my games?\".",
     "get_games_to_revisit": "Games the user put 5+ hours into, stopped playing 90+ days ago and didn't finish, "
                             "with the developer updates posted since they stopped. Use it for \"what have I "
                             "abandoned that's worth going back to?\".",

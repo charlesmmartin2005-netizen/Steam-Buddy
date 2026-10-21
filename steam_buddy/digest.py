@@ -11,6 +11,7 @@ import html
 import re
 import time
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -26,21 +27,44 @@ NEWS_PER_GAME = 2
 NEWS_FETCH = 15  # posts fetched per game; developer posts are mixed in with press articles
 REVISIT_MIN_HOURS = 5  # stopped games worth suggesting you go back to
 REVISIT_CANDIDATES = 8  # how many of them get their news checked (one request each, cached an hour)
+SAME_STORY = 0.8  # titles this similar are one story (the developer's post and the press write-up)
 
-# Developer posts include sale ads ("40% Off Sale Ending Soon!"), which aren't updates.
-_SALE_POST = re.compile(r"\bsale\b|\d+\s?%\s?off|\bdiscount|\bdeals?\b|\bbundle\b|\bfree weekend\b", re.I)
+# Developer posts that don't change the game: sale ads ("40% Off Sale Ending Soon!"),
+# award campaigns, stream schedules, and news about mobile versions.
+_NOT_AN_UPDATE = re.compile(
+    r"\bsale\b|\d+\s?%\s?off|\bdiscount|\bdeals?\b|\bbundle\b|\bfree weekend\b|\bvot(e|ing)\b|\bawards?\b"
+    r"|\bnominat|\bgiveaway|\bmerch|\b(dev|live)?stream\b|\bdevstream|\btwitch\b|\bmobile\b|\bios\b|\bandroid\b",
+    re.I,
+)
+# Media and their contents, which would otherwise leave image URLs in the text.
+_MEDIA = re.compile(
+    r"\[(img|previewyoutube|video)\b[^\]]*\].*?\[/\1\]|\[img\b[^\]]*\]|<(img|video|iframe)\b[^>]*>|\{STEAM_CLAN_IMAGE\}\S*",
+    re.I | re.S,
+)
+_HEADING_END = re.compile(r"\[/h\d\]|</h\d>", re.I)
+_TAG = re.compile(r"<[^>]+>|\[/?[a-zA-Z0-9*]+(?:[= ][^\]]*)?\]")
 
 
 def clean_text(text: str, limit: int = 400) -> str:
-    """Strip HTML, entities and Steam's BBCode from store and news text."""
-    text = re.sub(r"<[^>]+>|\[/?[a-zA-Z0-9*]+(=[^\]]*)?\]", " ", html.unescape(text or ""))
-    text = " ".join(text.split())
+    """Strip HTML, entities and Steam's BBCode from store and news text.
+
+    Every tag becomes a space so words on either side don't run together, and a
+    heading gets a colon: "[h2]Fixes[/h2]Magnet works" reads "Fixes: Magnet works".
+    """
+    text = _MEDIA.sub(" ", html.unescape(text or ""))
+    text = _HEADING_END.sub(": ", text)
+    text = " ".join(_TAG.sub(" ", text).split())
+    text = re.sub(r"([.!?:;,])\s*:(\s|$)", r"\1\2", text).strip(" :")  # "Fixes!:" or a heading with no text after it
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 def is_update(item: NewsItem) -> bool:
-    """A post by the developer that isn't a sale ad."""
-    return item.official and not _SALE_POST.search(item.title)
+    """A post by the developer that changes the game, so not a sale ad or a stream schedule."""
+    return item.official and not _NOT_AN_UPDATE.search(item.title)
+
+
+def _same_story(a: str, b: str) -> bool:
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio() >= SAME_STORY
 
 
 def _mostly_latin(text: str) -> bool:
@@ -64,11 +88,20 @@ class NewsPost:
 
 
 def recent_posts(client: SteamClient, appid: int, *, since: float, limit: int = NEWS_PER_GAME) -> list[NewsPost]:
-    """Posts since `since`: the developer's updates first, then press in a readable language."""
-    items = [i for i in client.get_news(appid, count=NEWS_FETCH, maxlength=600) if i.date >= since]
+    """Posts since `since`: the developer's updates first, then press in a readable language.
+
+    A press article covering the same story as a post already picked is left out.
+    """
+    items = [i for i in client.get_news(appid, count=NEWS_FETCH) if i.date >= since]
     updates = [i for i in items if is_update(i)]
     press = [i for i in items if not i.official and _mostly_latin(i.title)]
-    return [NewsPost.from_item(i) for i in (updates + press)[:limit]]
+    picked: list[NewsItem] = []
+    for i in updates + press:
+        if len(picked) == limit:
+            break
+        if not any(_same_story(i.title, p.title) for p in picked):
+            picked.append(i)
+    return [NewsPost.from_item(i) for i in picked]
 
 
 def followed_games(client: SteamClient, profile: TasteProfile, n: int = FOLLOW_GAMES) -> list[tuple[int, str, float]]:
@@ -98,7 +131,7 @@ def revisit_candidates(
     pool = []
     for why, games in (
         ("likely abandoned", profile.abandoned),
-        ("live-service game you stopped", profile.stopped_endless),
+        ("open-ended game you stopped", profile.stopped_endless),
         ("not played in a while", profile.most_played),
     ):
         for g in games:
@@ -115,7 +148,7 @@ def revisit_candidates(
     for why, g in pool[:n]:
         since = now - g.last_played_days_ago * DAY
         try:
-            items = client.get_news(g.appid, count=NEWS_FETCH, maxlength=600)
+            items = client.get_news(g.appid, count=NEWS_FETCH)
         except SteamAPIError:
             items = []
         newer = [i for i in items if i.date >= since]
@@ -274,5 +307,7 @@ def to_markdown(d: Digest) -> str:
         out += [f"**{_md(b['name'])}** ({played}). {why}".rstrip(), ""]
 
     if d.notes:
-        out += ["---", ""] + [f"_{_md(n)}_" for n in d.notes] + [""]
+        out += ["---", ""]
+        for n in d.notes:
+            out += [f"_{_md(n)}_", ""]
     return "\n".join(out)

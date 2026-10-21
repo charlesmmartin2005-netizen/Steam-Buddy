@@ -181,6 +181,13 @@ def test_achievement_progress(client, fake):
     assert (progress.unlocked, progress.total, progress.percent) == (2, 4, 50.0)
 
 
+def test_achievements_are_not_retried_on_server_errors(client, fake, sleeps):
+    fake.on(ACH, (500, {}), (500, {}))
+    with pytest.raises(SteamAPIError, match="HTTP 500"):
+        client.get_achievements(620)
+    assert len(fake.calls) == 1 and sleeps == []
+
+
 def test_achievements_no_stats_is_none(client, fake):
     fake.on(ACH, (400, {"playerstats": {"success": False, "error": "Requested app has no stats"}}))
     assert client.get_achievements(10) is None
@@ -296,6 +303,7 @@ def test_wishlist_and_news(client, fake):
     news = client.get_news(620, count=2)
     assert news[0].title == "Patch"
     assert [n.official for n in news] == [True, False]
+    assert fake.calls[-1].url.params["maxlength"] == "0"  # full text; Steam's blurbs run words together
     assert "key" not in fake.calls[-1].url.params  # news doesn't need the key
 
 

@@ -124,7 +124,7 @@ class FakeClient:
     def get_recently_played(self, count=0, *, refresh=False):
         return self.recent
 
-    def get_news(self, appid, count=5, *, maxlength=500, refresh=False):
+    def get_news(self, appid, count=5, *, refresh=False):
         return self.news.get(appid, [])[:count]
 
     def get_wishlist(self, *, refresh=False):
@@ -358,3 +358,8 @@ def test_best_backlog_game_is_the_unplayed_game_closest_to_your_taste(tools, fak
     assert best["name"] == "Unplayed Rogue" and best["hours"] == 0
     assert best["because_you_played"][0]["game"] == "Rogue Runner"
     assert "Rogue-like" in best["fits_your_tags"]
+
+
+def test_no_backlog_game_when_nothing_fits_well(tools):
+    # Backlog Epic (RPG, Open World) shares nothing specific with what you play.
+    assert tools.best_backlog_game() is None

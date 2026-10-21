@@ -8,7 +8,9 @@ Endpoints were checked against the current docs (October 2026):
     ISteamUser/GetPlayerSummaries/v2           communityvisibilitystate: 3 = public
     ISteamUserStats/GetPlayerAchievements/v1   appid, l
     ISteamUserStats/GetSchemaForGame/v2        appid, l
-    ISteamNews/GetNewsForApp/v2                appid, count, maxlength (no key needed)
+    ISteamNews/GetNewsForApp/v2                appid, count, maxlength (0 = full text with
+                                               its BBCode; a shorter blurb strips the markup
+                                               and runs headings into the text). No key needed
     IWishlistService/GetWishlist/v1            steamid -> items[{appid, priority, date_added}]
     IUserReviewsService/GetAppReviews/v1       input_json; replaces the deprecated
                                                store.steampowered.com/appreviews (no key needed)
@@ -81,6 +83,7 @@ PLAYTIME_HIDDEN_FIX = (
 
 
 MIN_TAG_REVIEWS = 50  # games in SteamSpy tag lists with fewer reviews than this are dropped
+NEWS_KEEP_CHARS = 6000  # of each news post's full text, kept in the cache; summaries use far less
 
 
 class SteamAPIError(Exception):
@@ -323,23 +326,26 @@ class SteamClient:
 
     # -- plumbing -----------------------------------------------------------
 
-    def _request(self, url: str, params: dict[str, Any], *, with_key: bool = False) -> httpx.Response:
+    def _request(
+        self, url: str, params: dict[str, Any], *, with_key: bool = False, retries: int | None = None
+    ) -> httpx.Response:
         """GET with rate limiting and retries on 429/5xx/network errors."""
+        retries = self.max_retries if retries is None else retries
         host = urlsplit(url).hostname or ""
         label = urlsplit(url).path  # safe to show: no query string
         if with_key:
             params = {**params, "key": self._key.reveal()}
 
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(retries + 1):
             self._limiter.wait(host)
             try:
                 resp = self._http.get(url, params=params)
             except httpx.TransportError as e:
-                if attempt == self.max_retries:
+                if attempt == retries:
                     raise SteamAPIError(f"network error calling {host}{label}: {type(e).__name__}") from None
                 self._sleep(self._backoff(attempt, None))
                 continue
-            if resp.status_code in RETRY_STATUSES and attempt < self.max_retries:
+            if resp.status_code in RETRY_STATUSES and attempt < retries:
                 delay = self._backoff(attempt, resp.headers.get("Retry-After"))
                 log.info("Steam %s returned %s, retrying in %.1fs", label, resp.status_code, delay)
                 self._sleep(delay)
@@ -360,8 +366,9 @@ class SteamClient:
         *,
         with_key: bool = False,
         accept: tuple[int, ...] = (200,),
+        retries: int | None = None,
     ) -> Any:
-        resp = self._request(url, params, with_key=with_key)
+        resp = self._request(url, params, with_key=with_key, retries=retries)
         label = f"{urlsplit(url).hostname}{urlsplit(url).path}"
         if resp.status_code in accept:
             try:
@@ -470,12 +477,14 @@ class SteamClient:
 
         def fetch() -> dict[str, int] | None:
             # Steam answers "no stats" with 400 and a private profile with 403,
-            # both with a JSON body explaining why.
+            # both with a JSON body explaining why. Some games answer 500 every
+            # time, so don't spend seconds retrying one game's achievements.
             data = self._get_json(
                 f"{API_BASE}/ISteamUserStats/GetPlayerAchievements/v1/",
                 {"steamid": self.steam_id, "appid": appid},
                 with_key=True,
                 accept=(200, 400, 403),
+                retries=0,
             )
             stats = data.get("playerstats", {})
             if not stats.get("success", False):
@@ -536,15 +545,20 @@ class SteamClient:
 
     # -- games --------------------------------------------------------------
 
-    def get_news(self, appid: int, count: int = 5, *, maxlength: int = 500, refresh: bool = False) -> list[NewsItem]:
+    def get_news(self, appid: int, count: int = 5, *, refresh: bool = False) -> list[NewsItem]:
+        """The latest posts, newest first. `contents` is raw BBCode/HTML: clean it before showing it."""
+
         def fetch() -> list[dict[str, Any]]:
+            # Full text rather than Steam's blurb, which drops the markup without
+            # leaving spaces ("Play StoreAdapted for mobile").
             data = self._get_json(
                 f"{API_BASE}/ISteamNews/GetNewsForApp/v2/",
-                {"appid": appid, "count": count, "maxlength": maxlength},
+                {"appid": appid, "count": count, "maxlength": 0},
             )
-            return data.get("appnews", {}).get("newsitems", [])
+            items = data.get("appnews", {}).get("newsitems", [])
+            return [{**n, "contents": (n.get("contents") or "")[:NEWS_KEEP_CHARS]} for n in items]
 
-        raw = self._cached("news", f"{appid}:{count}:{maxlength}", fetch, refresh)
+        raw = self._cached("news", f"{appid}:{count}:full", fetch, refresh)
         return [
             NewsItem(
                 gid=str(n.get("gid", "")),
