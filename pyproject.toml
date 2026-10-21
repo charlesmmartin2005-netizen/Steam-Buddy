@@ -23,5 +23,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 packages = ["steam_buddy"]
 
+[tool.setuptools.package-data]
+steam_buddy = ["web_ui.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

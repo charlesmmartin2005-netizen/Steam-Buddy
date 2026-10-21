@@ -23,13 +23,15 @@ steam-buddy/
 │   ├── recommend.py        # Phase 5: scoring candidates against your taste
 │   ├── digest.py           # Phase 6: news, games to go back to, the weekly digest
 │   ├── agent.py            # Phase 4: tool-use loop + system prompt
-│   └── main.py             # CLI entry: `steam-buddy`, `--check`, `--digest`
+│   ├── web.py              # the app window: local server for home, feed, picks, chat
+│   ├── web_ui.html         # the app's page (plain HTML, CSS and JS)
+│   └── main.py             # CLI entry: `steam-buddy`, `--check`, `--digest`, `--web`
 ├── scripts/
 │   ├── print_library.py    # Phase 2: library sorted by playtime
 │   └── print_profile.py    # Phase 3: taste profile
 └── tests/
     ├── fixtures/           # fake library for profile tests
-    └── test_*.py           # config, cache, client, profile, recommend, tools, agent, digest
+    └── test_*.py           # config, cache, client, profile, recommend, tools, agent, digest, web
 ```
 
 The modules live in a `steam_buddy/` package rather than at the top level, mainly
@@ -133,6 +135,27 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
    - Two new chat tools: `get_recent_news` and `get_games_to_revisit`;
      `get_game_news` results now say which posts are the developer's.
 
+## After the phases: the app window (`--web`)
+
+charles asked for a cleaner look with game art, "like the Xbox menu merged with
+Instagram". `--web` serves one page from `web.py` on 127.0.0.1 and opens it in
+an Edge app window (or the default browser): a home dashboard (story circles
+for what you're playing, the game worth going back to, picks and gems as cover
+art, activity and wishlist), a news feed, one card per pick, and the chat.
+
+- The home screen reuses `build_digest`, so it's free; it's kept for 15 minutes.
+  Only chat messages call Claude, and the "Ask" buttons elsewhere only fill in
+  the chat box.
+- Game art loads in the browser from Steam's image CDN, named by GetItems where
+  it can (newer games keep images under hashed paths), else the classic file
+  names; the page falls back to the header, then to a tile with initials.
+- The server is plain `http.server`, single-threaded because the cache is one
+  SQLite connection. It refuses requests not addressed to 127.0.0.1/localhost
+  (DNS rebinding), needs a per-launch token on every API call, only takes JSON
+  posts and sends no CORS headers, so another website can't start a chat and
+  spend credits. It also refuses to be framed. Data-derived links are limited
+  to http(s), steam: and in-page links.
+
 ## Steam endpoints (checked against the docs, October 2026)
 
 | Data | Endpoint | Key | Notes |
@@ -150,6 +173,7 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
 | Games by tag | `steamspy.com/api.php?request=tag&tag=X` | no | every game with that tag, with review counts and price: 464 games (150 KB) for Roguelike Deckbuilder, 39,000 (13 MB) for Action |
 | Store search | `store.steampowered.com/api/storesearch/` | no | matches titles only; price often missing |
 | Prices | `store.steampowered.com/api/appdetails?filters=price_overview` | no | the one filter that accepts many app ids per request; cached 6 hours |
+| Game art names | `IStoreBrowseService/GetItems/v1` with `input_json` (`ids`, `context`, `data_request.include_assets`) | no | docs list a key, but it answers without one; `assets` has `asset_url_format` (`steam/apps/ID/${FILENAME}?t=…`) and file names such as `header`, `library_capsule` or only `library_capsule_2x`; images live under `shared.akamai.steamstatic.com/store_item_assets/` |
 
 The API key travels as a query parameter, so the client never puts request URLs
 in error messages, drops exception chains that could carry them, and turns off
