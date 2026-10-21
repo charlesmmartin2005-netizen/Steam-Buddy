@@ -37,13 +37,12 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
 1. **Setup** (done): structure, `.env.example`, `requirements.txt`, README,
    config loader with a `--check` command that validates `.env` without printing
    the key.
-2. **Steam client + cache**: verify each endpoint against current docs first.
-   Wrappers for GetOwnedGames, GetRecentlyPlayedGames, GetPlayerAchievements,
-   GetSchemaForGame, GetNewsForApp, wishlist (IWishlistService/GetWishlist is the
-   current one, to be verified), store appdetails, store appreviews, SteamSpy tags.
-   Token-bucket rate limiter, retries with backoff on 429/5xx. SQLite cache with
-   TTLs: library 24h, store 7d, news 1h. Detect private game details and print the
-   exact setting to change. `scripts/print_library.py` to confirm it works.
+2. **Steam client + cache** (done): wrappers for every endpoint below, a per-host
+   rate limiter, retries with backoff on 429/5xx/network errors (honouring
+   Retry-After), SQLite cache with TTLs (library 24h, store 7d, news 1h) that falls
+   back to stale data when Steam is down. Detects a private library and hidden
+   playtime and prints the exact setting to change. `scripts/print_library.py`
+   confirms it works.
 3. **Taste profile**: playtime-weighted tags/genres, bounced-off games (< 1h),
    finished vs abandoned (achievement %), recent trend, inferred session length.
    Readable printout + tests on a fake library fixture.
@@ -53,6 +52,25 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
    tag match scoring; filter owned games.
 6. **News + weekly digest**: `--digest` prints 3 recs, 2 gems, news for recent
    top games, one backlog game to revisit.
+
+## Steam endpoints (checked against the docs, October 2026)
+
+| Data | Endpoint | Key | Notes |
+|---|---|---|---|
+| Library | `api.steampowered.com/IPlayerService/GetOwnedGames/v1` | yes | private library returns `{"response": {}}` |
+| Recent | `IPlayerService/GetRecentlyPlayedGames/v1` | yes | `count=0` returns all |
+| Profile | `ISteamUser/GetPlayerSummaries/v2` | yes | `communityvisibilitystate` 3 = public |
+| Achievements | `ISteamUserStats/GetPlayerAchievements/v1` | yes | 400 = no stats, 403 = private |
+| Achievement schema | `ISteamUserStats/GetSchemaForGame/v2` | yes | |
+| News | `ISteamNews/GetNewsForApp/v2` | no | |
+| Wishlist | `IWishlistService/GetWishlist/v1` | yes | returns app ids, priority, date added only |
+| Store details | `store.steampowered.com/api/appdetails` | no | about 200 requests per 5 min; we space them 1.5s apart |
+| Reviews | `IUserReviewsService/GetAppReviews/v1` | no | replaces the deprecated `store.steampowered.com/appreviews`, which we keep as a fallback |
+| Tags | `steamspy.com/api.php?request=appdetails` | no | 1 request/second; falls back to store genres + categories |
+
+The API key travels as a query parameter, so the client never puts request URLs
+in error messages, drops exception chains that could carry them, and turns off
+httpx's own request logging.
 
 ## Defaults chosen (change any of these)
 
