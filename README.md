@@ -6,7 +6,7 @@ on news for the games you care about, and answers questions like "what should I
 play tonight?". It's a Python CLI that chats with Claude, and Claude uses tools
 backed by your real Steam data.
 
-> Status: **Phase 4 (chat agent)**. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+> Status: **Phase 5 (recommendations)**. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
 
 ## Requirements
 
@@ -134,10 +134,19 @@ Ask things like:
 - what have I abandoned that's worth going back to?
 - what's on sale from my wishlist?
 - find me hidden gems like my favourite roguelikes
+- what should I buy next for under $20?
+- which game on my wishlist fits me best?
 
 While Claude works you'll see a line for each lookup it makes ("Checking your
 wishlist and prices"). Type `/reset` to start a new conversation, `/help` for
 examples, and `/quit` (or Ctrl+D) to leave. Ctrl+C stops the current answer.
+
+Recommendations are scored against your whole taste profile: each candidate's
+tags are compared with the tags you've put the most hours into, games with
+tags you tend to drop score lower, and Claude is told which of your games each
+pick connects to. The first recommendation or hidden-gem question takes
+longer (up to half a minute) while candidate tags are fetched; they're cached
+for a week.
 
 Claude only sees your data through tools, and it's told to back every
 recommendation with your hours and tags, never to suggest a game you already

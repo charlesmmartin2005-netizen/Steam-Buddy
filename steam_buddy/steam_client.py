@@ -80,6 +80,9 @@ PLAYTIME_HIDDEN_FIX = (
 )
 
 
+MIN_TAG_REVIEWS = 50  # games in SteamSpy tag lists with fewer reviews than this are dropped
+
+
 class SteamAPIError(Exception):
     """A Steam request failed. Messages never include the API key or request URL."""
 
@@ -644,14 +647,19 @@ class SteamClient:
 
 
     def get_tag_games(self, tag: str, *, refresh: bool = False) -> list[TagGame]:
-        """Every game SteamSpy files under a user tag (e.g. "Roguelike Deckbuilder")."""
+        """Games SteamSpy files under a user tag (e.g. "Roguelike Deckbuilder") with at least
+        MIN_TAG_REVIEWS reviews.
+
+        SteamSpy returns every game with the tag: 464 for Roguelike Deckbuilder, but
+        about 39,000 (13 MB) for Action, most with almost no reviews. Only games with
+        enough reviews to judge are kept, and only the fields we use.
+        """
 
         def fetch() -> list[dict[str, Any]]:
             data = self._get_json(STEAMSPY_URL, {"request": "tag", "tag": tag})
             if not isinstance(data, dict):
                 return []
-            # Keep only what we use; the full response is ~150 KB per tag.
-            return [
+            games = (
                 {
                     "appid": int(g.get("appid") or k),
                     "name": g.get("name", ""),
@@ -663,10 +671,12 @@ class SteamClient:
                 }
                 for k, g in data.items()
                 if isinstance(g, dict)
-            ]
+            )
+            return [g for g in games if g["positive"] + g["negative"] >= MIN_TAG_REVIEWS]
 
         raw = self._cached("tag_games", tag_key(tag), fetch, refresh)
-        return [TagGame(**g) for g in raw]
+        # Lists cached before the review filter existed are filtered here too.
+        return [TagGame(**g) for g in raw if g["positive"] + g["negative"] >= MIN_TAG_REVIEWS]
 
     def search_store(self, term: str, *, refresh: bool = False) -> list[dict[str, Any]]:
         """Store search by name. Ranks by title match, so it finds games, not genres."""
