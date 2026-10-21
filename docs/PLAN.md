@@ -90,8 +90,8 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
    - Every result explains itself: `because_you_played` names your most similar
      played games (specific tags only; at least 5 hours or playing now; never one
      you likely abandoned) and the tags they share. A taste-based result with no
-     such game is left out and listed as `left_out_no_link_to_your_games`. Also also `fits_your_tags`, `tags_you_tend_to_drop`, `early_access`,
-     `session_style`. Prices come live from the store in one batched request,
+     such game is left out and listed as `left_out_no_link_to_your_games`. Also
+     `fits_your_tags`, `tags_you_tend_to_drop`, `early_access`, `session_style`. Prices come live from the store in one batched request,
      since SteamSpy's can be days old; review counts are still SteamSpy's.
    - New `recommend_games` tool (optional price cap); `find_hidden_gems` searches
      your own top tags when no tags are given; `find_similar_games` scores against
