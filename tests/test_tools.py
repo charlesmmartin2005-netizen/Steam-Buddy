@@ -5,6 +5,7 @@ import time
 import pytest
 
 from steam_buddy.steam_client import (
+    AchievementProgress,
     AppDetails,
     OwnedGame,
     Price,
@@ -70,7 +71,9 @@ class FakeClient:
             103: TagInfo(103, {"Rogue-like": 300}, "steamspy"),
             104: TagInfo(104, {"Pixel Graphics": 300, "Rogue-like": 100}, "steamspy"),
             105: TagInfo(105, {"Pixel Graphics": 300, "Arcade": 200}, "steamspy"),
+            106: TagInfo(106, {"Racing": 300, "Cars": 200}, "steamspy"),
         }
+        self.achievements = {}
         self.tag_games = {
             "Rogue-like": [
                 tag_game(1, "Rogue Runner", 50000, 1000),  # owned
@@ -80,7 +83,8 @@ class FakeClient:
                 tag_game(103, "Mixed Bag", 300, 200),  # 60%
                 tag_game(104, "Decent", 140, 10),  # 93%, 150 reviews
             ],
-            "Pixel Graphics": [tag_game(104, "Decent", 140, 10), tag_game(105, "Pixel Only", 9500, 500)],
+            "Pixel Graphics": [tag_game(104, "Decent", 140, 10), tag_game(105, "Pixel Only", 9500, 500),
+                               tag_game(106, "Racer", 9900, 100)],
             "Deckbuilding": [tag_game(101, "Small Gem", 480, 20, price=499)],
         }
         self.tag_calls = []
@@ -95,7 +99,7 @@ class FakeClient:
         return self.tags.get(appid, TagInfo(appid, {}, "store"))
 
     def get_achievements(self, appid, *, refresh=False):
-        return None
+        return self.achievements.get(appid)
 
     def get_tag_games(self, tag, *, refresh=False):
         self.tag_calls.append(tag)
@@ -192,6 +196,18 @@ def test_recommendations_skip_owned_weak_and_noisy_games(tools, fake):
     ids = {g["appid"] for g in out["games"]}
     assert ids == {100, 101, 105}  # 1 owned, 103 at 60%, 104 under 200 reviews
     assert all(g["match"] > 0 for g in out["games"])
+
+
+def test_results_with_no_link_to_your_games_are_left_out(tools):
+    out = call(tools, "recommend_games")
+    assert "Racer" not in {g["name"] for g in out["games"]}
+    assert out["left_out_no_link_to_your_games"] == ["Racer"]
+
+
+def test_games_you_likely_abandoned_are_not_cited(tools, fake):
+    fake.achievements[2] = AchievementProgress(2, unlocked=1, total=20)  # Deck Delver: 5%, 200 days ago
+    gem = next(g for g in call(tools, "find_hidden_gems")["games"] if g["appid"] == 101)
+    assert [c["game"] for c in gem["because_you_played"]] == ["Rogue Runner"]
 
 
 def test_recommendations_flag_tags_you_drop(tools):

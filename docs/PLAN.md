@@ -88,8 +88,9 @@ because a top-level `profile.py` would shadow Python's built-in `profile` module
      Umbrella tags count half, and games with fewer than five tags get a
      proportionally lower match (one "Action" tag isn't evidence of a fit).
    - Every result explains itself: `because_you_played` names your most similar
-     played games (specific tags only, at least 5 hours played) and the tags they
-     share; also `fits_your_tags`, `tags_you_tend_to_drop`, `early_access`,
+     played games (specific tags only; at least 5 hours or playing now; never one
+     you likely abandoned) and the tags they share. A taste-based result with no
+     such game is left out and listed as `left_out_no_link_to_your_games`. Also also `fits_your_tags`, `tags_you_tend_to_drop`, `early_access`,
      `session_style`. Prices come live from the store in one batched request,
      since SteamSpy's can be days old; review counts are still SteamSpy's.
    - New `recommend_games` tool (optional price cap); `find_hidden_gems` searches

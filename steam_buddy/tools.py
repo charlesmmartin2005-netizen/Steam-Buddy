@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from .profile import BOUNCE_MAX_MINUTES, TasteProfile, _game_tags, _is_software, build_profile, gather, session_fit
 from .recommend import (
+    CITE_MIN_HOURS,
     REASON_TAGS,
     SHORTLIST,
     Scored,
@@ -89,7 +90,7 @@ class SteamTools:
         self.client = client
         self._profile: TasteProfile | None = None
         self._tag_spellings: dict[str, str] | None = None
-        self._played: list[tuple[OwnedGame, dict[str, float]]] = []  # games you stuck with, with their tags
+        self._citable: list[tuple[OwnedGame, dict[str, float]]] = []  # games worth naming as reasons
 
     # -- shared state -------------------------------------------------------
 
@@ -100,10 +101,15 @@ class SteamTools:
         if self._profile is None:
             data = gather(self.client)
             self._profile = build_profile(data)
-            self._played = [
+            # Name games you put real time into, or are playing now; never ones you likely abandoned.
+            active = {g.appid for g in self._profile.active}
+            abandoned = {g.appid for g in self._profile.abandoned}
+            self._citable = [
                 (g, game_vector(data.tags.get(g.appid)))
                 for g in data.games
-                if g.playtime_forever >= BOUNCE_MAX_MINUTES and not _is_software(data.tags.get(g.appid))
+                if g.appid not in abandoned
+                and not _is_software(data.tags.get(g.appid))
+                and (g.hours >= CITE_MIN_HOURS or (g.appid in active and g.playtime_forever >= BOUNCE_MAX_MINUTES))
             ]
             self._tag_spellings = {}
             for info in data.tags.values():
@@ -237,7 +243,7 @@ class SteamTools:
                       shortlist=max(SHORTLIST, n))
         return {
             "pool_from_your_tags": seeds,
-            "games": self._present(ranked, target, n, max_cents=max_cents),
+            **self._present(ranked, target, n, max_cents=max_cents),
             "candidates_considered": len(candidates),
             **({"tags_with_no_games": empty} if empty else {}),
         }
@@ -264,7 +270,7 @@ class SteamTools:
                       shortlist=max(SHORTLIST, n))
         return {
             "pool_from_tags": [self._steam_tag(t) for t in tag_list],
-            "games": self._present(ranked, target, n, versus_you=False),
+            **self._present(ranked, target, n, versus_you=False),
             "excluded_owned": sum(1 for a in pool if a in owned),
             **({"tags_with_no_games": empty} if empty else {}),
         }
@@ -296,7 +302,7 @@ class SteamTools:
         return {
             "criteria": {"pool_from_tags": [self._steam_tag(t) for t in tag_list], "min_positive_pct": min_pct,
                          "review_count_between": [min_reviews, max_reviews]},
-            "games": self._present(ranked, target, n),
+            **self._present(ranked, target, n),
             "candidates_considered": len(gems),
             "note": "Review counts come from SteamSpy and can lag Steam by a few days; "
                     "call get_game_details to confirm before recommending.",
@@ -306,21 +312,29 @@ class SteamTools:
     def _present(
         self, ranked: list[Scored], target: dict[str, float], n: int, *,
         versus_you: bool = True, max_cents: float | None = None,
-    ) -> list[dict[str, Any]]:
-        """The top n results, priced live from the store (SteamSpy's prices can be days old)."""
+    ) -> dict[str, Any]:
+        """The top n results, priced live from the store (SteamSpy's prices can be days old).
+
+        Taste-based results that share no specific tags with any game you've put
+        time into are left out (and named), since there's no honest reason to give.
+        """
         try:
             prices = self.client.get_prices([s.game.appid for s in ranked])
         except SteamAPIError:
             prices = {}
-        out = []
+        out, unlinked = [], []
         for s in ranked:
             price = prices.get(s.game.appid)
             if max_cents is not None and price and price.currency == "USD" and price.final > max_cents:
                 continue  # the sale SteamSpy saw has ended
-            out.append(self._scored_out(s, target, price, versus_you=versus_you))
+            item = self._scored_out(s, target, price, versus_you=versus_you)
+            if versus_you and not item["because_you_played"]:
+                unlinked.append(item["name"])
+                continue
+            out.append(item)
             if len(out) == n:
                 break
-        return out
+        return {"games": out, **({"left_out_no_link_to_your_games": unlinked} if unlinked else {})}
 
     def _scored_out(
         self, s: Scored, target: dict[str, float], price: Price | None, *, versus_you: bool
@@ -349,7 +363,7 @@ class SteamTools:
             out["fits_your_tags"] = reason_tags(s.info, target)
             out["because_you_played"] = [
                 {"game": played.name, "hours": round(played.hours, 1), "shared_tags": tags}
-                for played, tags in closest_played(s.info, self._played)
+                for played, tags in closest_played(s.info, self._citable)
             ]
         else:
             out["shares_tags"] = reason_tags(s.info, target)

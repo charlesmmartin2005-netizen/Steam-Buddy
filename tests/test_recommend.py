@@ -112,7 +112,6 @@ def test_closest_played_weighs_similarity_by_hours():
     played = [
         (OwnedGame(10, "Tiny Rogues", 9000, 0, None), game_vector(info(10, {"Bullet Hell": 10, "Action Roguelike": 9}))),
         (OwnedGame(11, "Clone", 600, 0, None), game_vector(info(11, {"Bullet Hell": 10, "Action Roguelike": 8}))),
-        (OwnedGame(12, "Dropped Clone", 180, 0, None), game_vector(info(12, {"Bullet Hell": 10}))),  # 3 hours
         (OwnedGame(13, "Big Sim", 50000, 0, None), game_vector(info(13, {"Farming Sim": 10}))),
         # Shares only umbrella tags with the candidate, however many hours it has.
         (OwnedGame(14, "Big Action", 50000, 0, None), game_vector(info(14, {"Action": 10, "RPG": 5}))),

@@ -28,7 +28,7 @@ TASTE_TAGS = 30  # how many of your top tags make up your taste vector
 DROP_PENALTY = 0.1  # score lost per tag you tend to drop among a game's top 5
 REASON_TAGS = 6  # reasons only cite a game's top tags, the ones that say what it is
 CLOSEST_MIN = 0.3  # a game you played must be at least this similar to be cited as a reason
-CITE_MIN_HOURS = 5  # ...and played at least this long; citing a game you dropped hurts the case
+CITE_MIN_HOURS = 5  # games cited as reasons need this many hours (or to be in play right now)
 BROAD_WEIGHT = 0.5  # umbrella tags count half when matching, so specific overlap decides
 FULL_CONFIDENCE_TAGS = 5  # games with fewer tags than this get a proportionally lower match
 
@@ -166,16 +166,14 @@ def closest_played(
 ) -> list[tuple[OwnedGame, list[str]]]:
     """The games you played that are most like this one.
 
-    Only specific tags count here: sharing "Action" with a 300-hour game doesn't
-    make it a reason. Similarity counts most (squared), then your hours, so a
-    near-identical game you played for 100 hours beats a loosely similar one you
-    played for 200. Games under CITE_MIN_HOURS aren't cited.
+    `played` should hold only games worth citing (see SteamTools). Only specific
+    tags count here: sharing "Action" with a 300-hour game doesn't make it a
+    reason. Similarity counts most (squared), then your hours, so a near-identical
+    game you played for 100 hours beats a loosely similar one you played for 200.
     """
     vector = _specific(game_vector(info))
     scored = []
     for g, gv in played:
-        if g.hours < CITE_MIN_HOURS:
-            continue
         sim = cosine(vector, _specific(gv))
         if sim >= CLOSEST_MIN:
             scored.append((sim * sim * math.sqrt(g.hours), g, gv))
