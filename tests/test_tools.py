@@ -7,8 +7,10 @@ import pytest
 from steam_buddy.steam_client import (
     AchievementProgress,
     AppDetails,
+    NewsItem,
     OwnedGame,
     Price,
+    RecentGame,
     ReviewSummary,
     SteamAPIError,
     TagGame,
@@ -21,7 +23,6 @@ from steam_buddy.tools import (
     TOOL_DEFINITIONS,
     TOOL_SCHEMAS,
     SteamTools,
-    _clean_text,
 )
 
 NOW = time.time()
@@ -90,6 +91,8 @@ class FakeClient:
         self.tag_calls = []
         self.app_tag_calls = []
         self.fail_details = False
+        self.recent = []
+        self.news = {}
 
     def get_owned_games(self, *, refresh=False):
         return self.owned
@@ -117,6 +120,12 @@ class FakeClient:
 
     def get_review_summary(self, appid, *, refresh=False):
         return ReviewSummary(appid, 8, "Very Positive", 140, 10, 150)
+
+    def get_recently_played(self, count=0, *, refresh=False):
+        return self.recent
+
+    def get_news(self, appid, count=5, *, refresh=False):
+        return self.news.get(appid, [])[:count]
 
     def get_wishlist(self, *, refresh=False):
         return [WishlistItem(300, 2, 100), WishlistItem(301, 1, 200)]
@@ -302,12 +311,6 @@ def test_schemas_match_tool_methods():
         assert schema["additionalProperties"] is False
 
 
-def test_clean_text_strips_markup():
-    raw = "[h1]Patch 1.2[/h1]<p>Fixed &amp; improved [url=https://x]stuff[/url]</p>"
-    assert _clean_text(raw) == "Patch 1.2 Fixed & improved stuff"
-    assert _clean_text("word " * 200, limit=20).endswith("…")
-
-
 def test_wilson_rewards_more_reviews_at_the_same_score():
     assert wilson_lower(90, 100) < wilson_lower(900, 1000)
     assert wilson_lower(10, 10) < wilson_lower(950, 1000)
@@ -317,3 +320,46 @@ def test_wilson_rewards_more_reviews_at_the_same_score():
 def test_game_details_description_is_plain_text(tools, fake):
     fake.get_app_details = lambda appid, **kw: details(appid, "HOLE", short_description="Casual &amp; Hard <b>FPS</b>")
     assert call(tools, "get_game_details", appid=5)["description"] == "Casual & Hard FPS"
+
+
+def news_item(title, days_ago, official=True):
+    return NewsItem(title, title, "https://example.com", "", "Body", "Announcements", int(NOW - days_ago * DAY),
+                    "steam_community_announcements" if official else "pcgamer", 1 if official else 0)
+
+
+def test_game_news_marks_developer_posts(tools, fake):
+    fake.news = {1: [news_item("Patch", 1), news_item("Review", 2, official=False)]}
+    out = call(tools, "get_game_news", appid=1)
+    assert [(n["title"], n["official"]) for n in out["news"]] == [("Patch", True), ("Review", False)]
+
+
+def test_recent_news_covers_games_played_lately(tools, fake):
+    fake.recent = [RecentGame(1, "Rogue Runner", 300, 12000)]
+    fake.news = {1: [news_item("Review", 1, official=False), news_item("Patch", 2), news_item("Old", 30)]}
+    out = call(tools, "get_recent_news")
+    assert out["days"] == 14
+    game = out["games"][0]
+    assert (game["name"], game["hours_last_2_weeks"]) == ("Rogue Runner", 5.0)
+    assert [p["title"] for p in game["posts"]] == ["Patch", "Review"]  # the chat gets press coverage too
+
+
+def test_games_to_revisit_lists_updates_since_you_stopped(tools, fake):
+    fake.news = {2: [news_item("Expansion", 20), news_item("Launch", 400)]}
+    out = call(tools, "get_games_to_revisit")
+    # Rogue Runner is still being played; Deck Delver (100h) was last played 200 days ago.
+    assert [g["name"] for g in out["games"]] == ["Deck Delver"]
+    assert [u["title"] for u in out["games"][0]["updates"]] == ["Expansion"]
+
+
+def test_best_backlog_game_is_the_unplayed_game_closest_to_your_taste(tools, fake):
+    fake.owned.append(owned(12, "Unplayed Rogue", 0))
+    fake.tags[12] = TagInfo(12, {"Rogue-like": 300, "Pixel Graphics": 200, "Action": 50}, "steamspy")
+    best = tools.best_backlog_game()
+    assert best["name"] == "Unplayed Rogue" and best["hours"] == 0
+    assert best["because_you_played"][0]["game"] == "Rogue Runner"
+    assert "Rogue-like" in best["fits_your_tags"]
+
+
+def test_no_backlog_game_when_nothing_fits_well(tools):
+    # Backlog Epic (RPG, Open World) shares nothing specific with what you play.
+    assert tools.best_backlog_game() is None

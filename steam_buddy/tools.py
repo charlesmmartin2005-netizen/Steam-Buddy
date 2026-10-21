@@ -9,14 +9,24 @@ Ranking lives in recommend.py.
 
 from __future__ import annotations
 
-import html
 import json
 import logging
-import re
+import time
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from .profile import BOUNCE_MAX_MINUTES, TasteProfile, _game_tags, _is_software, build_profile, gather, session_fit
+from .digest import NEWS_DAYS, clean_text, followed_games, recent_posts, revisit_candidates
+from .profile import (
+    BOUNCE_MAX_MINUTES,
+    GameSummary,
+    TasteProfile,
+    _game_tags,
+    _is_software,
+    build_profile,
+    gather,
+    session_fit,
+)
 from .recommend import (
     CITE_MIN_HOURS,
     REASON_TAGS,
@@ -30,12 +40,14 @@ from .recommend import (
     seed_tags,
     taste_vector,
 )
-from .steam_client import MIN_TAG_REVIEWS, OwnedGame, Price, SteamAPIError, SteamClient, TagGame, tag_key
+from .steam_client import MIN_TAG_REVIEWS, OwnedGame, Price, SteamAPIError, SteamClient, TagGame, TagInfo, tag_key
 
 log = logging.getLogger(__name__)
 
 MAX_TAGS_PER_QUERY = 3  # each tag is one SteamSpy request (1/second, cached a week)
 MAX_RESULTS = 15
+BACKLOG_CHECK = 40  # never-played games whose tags best_backlog_game reads (cached a week)
+BACKLOG_MIN_MATCH = 0.3  # below this, no backlog game is suggested: a weak fit isn't worth naming
 
 
 def _int(value: Any, name: str, *, lo: int, hi: int, default: int | None = None) -> int:
@@ -76,13 +88,6 @@ def _days_ago(ts: int | None) -> int | None:
     if not ts:
         return None
     return max(0, int((datetime.now(timezone.utc).timestamp() - ts) // 86400))
-
-
-def _clean_text(text: str, limit: int = 400) -> str:
-    """Strip HTML, entities and Steam's BBCode from store and news text."""
-    text = re.sub(r"<[^>]+>|\[/?[a-zA-Z0-9*]+(=[^\]]*)?\]", " ", html.unescape(text or ""))
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
 class SteamTools:
@@ -190,7 +195,7 @@ class SteamTools:
             "appid": appid,
             "name": details.name,
             "type": details.type,
-            "description": _clean_text(details.short_description, limit=600),
+            "description": clean_text(details.short_description, limit=600),
             "tags": list(tags.tags)[:12],
             "session_style": session_fit(tags),
             "genres": details.genres,
@@ -361,20 +366,56 @@ class SteamTools:
         }
         if versus_you:
             out["fits_your_tags"] = reason_tags(s.info, target)
-            out["because_you_played"] = [
-                {"game": played.name, "hours": round(played.hours, 1), "shared_tags": tags}
-                for played, tags in closest_played(s.info, self._citable)
-            ]
+            out["because_you_played"] = self._because(s.info)
         else:
             out["shares_tags"] = reason_tags(s.info, target)
         if s.drops:
             out["tags_you_tend_to_drop"] = s.drops
         return out
 
+    def _because(self, info: TagInfo | None) -> list[dict[str, Any]]:
+        """The games you put time into that are most like this one, and what they share."""
+        self.profile()
+        return [
+            {"game": played.name, "hours": round(played.hours, 1), "shared_tags": tags}
+            for played, tags in closest_played(info, self._citable)
+        ]
+
+    def best_backlog_game(self) -> dict[str, Any] | None:
+        """The game you own but never played that fits your taste best (for the digest)."""
+        target = self._taste()
+        best: tuple[float, GameSummary, TagInfo] | None = None
+        for g in self.profile().unplayed[:BACKLOG_CHECK]:
+            try:
+                info = self.client.get_app_tags(g.appid)
+            except SteamAPIError:
+                continue
+            if _is_software(info):
+                continue
+            m = match_score(target, game_vector(info))
+            if best is None or m > best[0]:
+                best = (m, g, info)
+        if best is None or best[0] < BACKLOG_MIN_MATCH:
+            return None
+        m, g, info = best
+        because = self._because(info)
+        if not because:
+            return None
+        return {
+            "appid": g.appid,
+            "name": g.name,
+            "hours": g.hours,
+            "match": round(100 * m),
+            "tags": list(_game_tags(info))[:REASON_TAGS],
+            "session_style": session_fit(info),
+            "fits_your_tags": reason_tags(info, target),
+            "because_you_played": because,
+        }
+
     def get_game_news(self, appid: Any, count: Any = None) -> dict[str, Any]:
         appid = _int(appid, "appid", lo=1, hi=10**8)
         n = _int(count, "count", lo=1, hi=10, default=3)
-        items = self.client.get_news(appid, count=n, maxlength=600)
+        items = self.client.get_news(appid, count=n)
         return {
             "appid": appid,
             "news": [
@@ -382,11 +423,42 @@ class SteamTools:
                     "title": i.title,
                     "date": datetime.fromtimestamp(i.date, timezone.utc).strftime("%Y-%m-%d"),
                     "source": i.feedlabel,
+                    "official": i.official,
                     "url": i.url,
-                    "summary": _clean_text(i.contents),
+                    "summary": clean_text(i.contents),
                 }
                 for i in items
             ],
+        }
+
+    def get_recent_news(self, days: Any = None) -> dict[str, Any]:
+        d = _int(days, "days", lo=1, hi=60, default=NEWS_DAYS)
+        since = time.time() - d * 86400
+        games = []
+        for appid, name, hours in followed_games(self.client, self.profile()):
+            try:
+                posts = [asdict(p) for p in recent_posts(self.client, appid, since=since, limit=4, always_press=True)]
+            except SteamAPIError as e:
+                games.append({"appid": appid, "name": name, "error": f"Steam request failed: {e}"})
+                continue
+            games.append({"appid": appid, "name": name, "hours_last_2_weeks": hours, "posts": posts})
+        return {
+            "days": d,
+            "games": games,
+            "note": "Games played in the last two weeks, most hours first. official=true is the developer's own "
+                    "post (sale ads, award campaigns, streams and mobile news left out); the rest is press.",
+        }
+
+    def get_games_to_revisit(self, max_results: Any = None) -> dict[str, Any]:
+        n = _int(max_results, "max_results", lo=1, hi=10, default=5)
+        out = [
+            {**asdict(r), "updates": [asdict(p) for p in r.updates[:5]]}
+            for r in revisit_candidates(self.client, self.profile(), time.time())[:n]
+        ]
+        return {
+            "games": out,
+            "note": "Games with 5+ hours you haven't played in 90+ days and didn't finish, those with developer "
+                    "updates since you stopped first. more_updates means there were more posts than were checked.",
         }
 
     def get_wishlist(self, max_items: Any = None) -> dict[str, Any]:
@@ -530,6 +602,12 @@ TOOL_SCHEMAS: dict[str, dict[str, Any]] = {
         "appid": _APPID,
         "count": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Default 3."},
     }, ["appid"]),
+    "get_recent_news": _schema({
+        "days": {"type": "integer", "minimum": 1, "maximum": 60, "description": f"Default {NEWS_DAYS}."},
+    }),
+    "get_games_to_revisit": _schema({
+        "max_results": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Default 5."},
+    }),
     "get_wishlist": _schema({"max_items": {"type": "integer", "minimum": 1, "maximum": 50}}),
     "get_backlog": _schema({
         "max_hours": {"type": "number", "description": "Include games played at most this long. Default 2."},
@@ -563,7 +641,14 @@ TOOL_DESCRIPTIONS = {
     "find_hidden_gems": "Highly rated games with relatively few reviews that the user does NOT own, scored "
                         "against their taste like recommend_games. Without tags it searches the user's own top "
                         "tags. Owned games are already removed.",
-    "get_game_news": "Latest news posts and patch notes for a game.",
+    "get_game_news": "Latest news posts and patch notes for one game. official=true marks the developer's own "
+                     "announcements; the rest is press.",
+    "get_recent_news": "News for the games the user played in the last two weeks: the developer's updates "
+                       "first (sale ads, streams and mobile news left out), then press. Use it for "
+                       "\"what's new in my games?\".",
+    "get_games_to_revisit": "Games the user put 5+ hours into, stopped playing 90+ days ago and didn't finish, "
+                            "with the developer updates posted since they stopped. Use it for \"what have I "
+                            "abandoned that's worth going back to?\".",
     "get_wishlist": "The user's wishlist with current prices, discounts, release dates, tags, review "
                     "scores and match (0-100) against their taste.",
     "get_backlog": "Games the user owns but has never played or barely played, with their tags and a "

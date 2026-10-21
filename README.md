@@ -6,7 +6,7 @@ on news for the games you care about, and answers questions like "what should I
 play tonight?". It's a Python CLI that chats with Claude, and Claude uses tools
 backed by your real Steam data.
 
-> Status: **Phase 5 (recommendations)**. See [docs/PLAN.md](docs/PLAN.md) for the roadmap.
+> Status: **all six phases built**. See [docs/PLAN.md](docs/PLAN.md) for how it works.
 
 ## Requirements
 
@@ -136,6 +136,7 @@ Ask things like:
 - find me hidden gems like my favourite roguelikes
 - what should I buy next for under $20?
 - which game on my wishlist fits me best?
+- what's new in the games I've been playing?
 
 While Claude works you'll see a line for each lookup it makes ("Checking your
 wishlist and prices"). Type `/reset` to start a new conversation, `/help` for
@@ -172,3 +173,58 @@ See [docs/PLAN.md](docs/PLAN.md#layout).
 Everything runs locally. Steam data is cached in a SQLite file on your machine
 (`~/.cache/steam-buddy/cache.sqlite3` by default). Your keys are never logged,
 printed or committed.
+
+## 8. Weekly digest
+
+```bash
+python -m steam_buddy.main --digest                            # print it
+python -m steam_buddy.main --digest --out "digests/{date}.md"  # save it as Markdown
+python -m steam_buddy.main --digest --refresh                  # re-fetch your account data first
+```
+
+The digest has:
+
+- **Top picks**: three games you don't own, scored against your taste, each
+  with the games of yours it's most like.
+- **Hidden gems**: two highly rated, lesser-known games (not repeats of the picks).
+- **News** for the games you've played most in the last two weeks: the
+  developer's own updates, or press coverage when the developer posted nothing
+  (press mostly re-reports announcements). Sale ads, award campaigns, stream
+  schedules, brand tie-ins and mobile-version news don't count as updates.
+- **Worth going back to**: a game you put real time into and stopped, preferring
+  one that's had developer updates since you left. If none has, it suggests the
+  game in your backlog that best fits your taste, when one fits well enough.
+
+It's built straight from your Steam data without asking Claude, so it doesn't
+need an Anthropic key and costs nothing to run. `{date}` in the `--out` name
+becomes the date, so a weekly run keeps one file per week. The `digests/`
+folder is gitignored.
+
+### Run it every week on Windows
+
+Open PowerShell and run this once, changing the first line to wherever your
+Steam Buddy folder is:
+
+```powershell
+$dir = "C:\path\to\Steam Buddy"
+$action = New-ScheduledTaskAction -Execute "$dir\.venv\Scripts\python.exe" `
+    -Argument '-m steam_buddy.main --digest --out "digests\{date}.md"' -WorkingDirectory $dir
+$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At 10am
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable
+Register-ScheduledTask -TaskName "Steam Buddy digest" -Action $action -Trigger $trigger -Settings $settings
+```
+
+Every Sunday at 10am (or as soon as the PC is on, if it was off then) a window
+opens while it runs, usually under a minute, and the digest lands in the
+`digests` folder. The
+working directory matters: it's where Steam Buddy finds your `.env`. To try it
+straight away, run `Start-ScheduledTask "Steam Buddy digest"`; to remove it,
+`Unregister-ScheduledTask "Steam Buddy digest"`.
+
+### On macOS or Linux
+
+Add a line like this with `crontab -e`:
+
+```
+0 10 * * 0 cd /path/to/steam-buddy && .venv/bin/python -m steam_buddy.main --digest --out "digests/{date}.md"
+```

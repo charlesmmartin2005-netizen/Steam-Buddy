@@ -58,6 +58,11 @@ NON_DESCRIPTIVE_TAGS = {
     "Steam Leaderboards", "Steam Workshop", "Steam Timeline", "Stats", "Captions available",
     "Commentary available", "HDR available", "Valve Anti-Cheat enabled", "Remote Play on TV",
     "Remote Play on Phone", "Remote Play on Tablet", "Includes Source SDK",
+    # store accessibility categories
+    "Camera Comfort", "Adjustable Text Size", "Adjustable Difficulty", "Color Alternatives",
+    "Custom Volume Controls", "Stereo Sound", "Surround Sound", "Playable without Timed Input",
+    "Mouse Only Option", "Touch Only Option", "Keyboard Only Option", "Subtitle Options", "Save Anytime",
+    "Chat Speech-to-text", "Chat Text-to-speech",
 }
 
 # Any of these among a title's top tags marks it as software, not a game.
