@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from steam_buddy.profile import DAY, LibraryData, build_profile, gather
-from steam_buddy.steam_client import AchievementProgress, OwnedGame, SteamAPIError, TagInfo
+from steam_buddy.profile import DAY, PRIVATE_STOP_AFTER, LibraryData, build_profile, gather
+from steam_buddy.steam_client import AchievementProgress, OwnedGame, ProfilePrivateError, SteamAPIError, TagInfo
 
 FIXTURE = Path(__file__).parent / "fixtures" / "fake_library.json"
 
@@ -147,5 +147,48 @@ def test_gather_skips_unplayed_and_notes_failures():
     gathered = gather(client, now=data.now, progress=lambda stage, i, n: seen.append(stage))
     assert 8 not in client.tag_calls  # never played: no need to fetch tags
     assert gathered.achievements[1] is None
-    assert any("achievements for 1 games" in n for n in gathered.notes)
+    assert any("achievements for 1 games" in n and "boom" in n for n in gathered.notes)
     assert {"tags", "achievements"} <= set(seen)
+
+
+def test_tag_spelling_variants_are_merged_and_matched():
+    now = 1_800_000_000
+    games = [
+        OwnedGame(1, "Roguey", 6_000, 0, now - DAY),
+        OwnedGame(2, "Other Roguey", 3_000, 0, now - DAY),
+    ]
+    tags = {
+        # SteamSpy's spellings: hyphenated, HTML-escaped, trailing space
+        1: TagInfo(1, {"Rogue-like": 50, "Single-player": 40, "Point &amp; Click": 10, "Dystopian ": 5}, "steamspy"),
+        2: TagInfo(2, {"Roguelike": 30, "Multi-player": 20, "Multiplayer": 25}, "steamspy"),
+    }
+    p = build_profile(LibraryData(games, tags, {}, now))
+    names_ = [t.tag for t in p.top_tags]
+    assert names_.count("Rogue-like") + names_.count("Roguelike") == 1
+    roguelike = next(t for t in p.top_tags if t.tag in ("Rogue-like", "Roguelike"))
+    assert roguelike.games == 2
+    assert "Single-player" not in names_  # non-descriptive, despite the hyphen
+    assert "Point & Click" in names_ and "Dystopian" in names_
+    assert sum(1 for n in names_ if n.replace("-", "") == "Multiplayer") == 1
+    assert p.session_lean["lean"] == "short runs"  # "Rogue-like" counts as a short-run genre
+
+
+class PrivateAchievementsClient(FakeClient):
+    def __init__(self, data):
+        super().__init__(data)
+        self.ach_calls = 0
+
+    def get_achievements(self, appid, refresh=False):
+        self.ach_calls += 1
+        raise ProfilePrivateError()
+
+
+def test_gather_explains_private_achievements_and_stops_asking():
+    data = load_fixture()
+    client = PrivateAchievementsClient(data)
+    gathered = gather(client, now=data.now)
+    assert client.ach_calls == PRIVATE_STOP_AFTER
+    assert all(v is None for v in gathered.achievements.values())
+    note = next(n for n in gathered.notes if "aren't public" in n)
+    assert "Game details" in note and "steamcommunity.com/my/edit/settings" in note
+    assert not any("Couldn't read" in n for n in gathered.notes)

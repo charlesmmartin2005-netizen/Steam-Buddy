@@ -24,8 +24,10 @@ message, and it quiets httpx's own request logging.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -592,17 +594,40 @@ class SteamClient:
         tags: dict[str, int] = {}
         if not self._steamspy_down:
             try:
-                tags = self._cached("app_tags", str(appid), fetch, refresh)
+                tags = normalize_tags(self._cached("app_tags", str(appid), fetch, refresh))
             except SteamAPIError as e:
                 # Don't pay the retry cost on every game if SteamSpy is down.
                 log.info("SteamSpy unavailable (%s); using store genres for the rest of this run", e)
                 self._steamspy_down = True
         if tags:
-            return TagInfo(appid, dict(sorted(tags.items(), key=lambda kv: -kv[1])), "steamspy")
+            return TagInfo(appid, tags, "steamspy")
 
         details = self.get_app_details(appid)
-        fallback = {name: 1 for name in (details.genres + details.categories)} if details else {}
+        fallback = normalize_tags({name: 1 for name in (details.genres + details.categories)}) if details else {}
         return TagInfo(appid, fallback, "store")
+
+
+def tag_key(tag: str) -> str:
+    """Spelling-insensitive key: "Rogue-like", "Roguelike" and "roguelike " all match."""
+    return re.sub(r"[^a-z0-9]", "", html.unescape(tag).lower())
+
+
+def normalize_tags(tags: dict[str, int]) -> dict[str, int]:
+    """Clean up tag names and merge variant spellings, highest votes first.
+
+    SteamSpy and the store disagree on spelling ("Multiplayer" vs "Multi-player"),
+    sometimes HTML-escape names ("Point &amp; Click"), and leave stray spaces.
+    The variant with the most votes keeps its spelling.
+    """
+    merged: dict[str, tuple[str, int]] = {}
+    for raw, votes in tags.items():
+        name = " ".join(html.unescape(str(raw)).split())
+        key = tag_key(name)
+        if not key:
+            continue
+        if key not in merged or votes > merged[key][1]:
+            merged[key] = (name, max(votes, merged.get(key, ("", 0))[1]))
+    return dict(sorted(merged.values(), key=lambda kv: -kv[1]))
 
 
 def _parse_query_summary(summary: dict[str, Any] | None) -> dict[str, Any] | None:

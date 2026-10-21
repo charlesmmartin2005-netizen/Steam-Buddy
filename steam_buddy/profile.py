@@ -19,7 +19,16 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from .steam_client import AchievementProgress, OwnedGame, SteamAPIError, SteamClient, TagInfo
+from .steam_client import (
+    AchievementProgress,
+    OwnedGame,
+    ProfilePrivateError,
+    SteamAPIError,
+    SteamClient,
+    TagInfo,
+    normalize_tags,
+    tag_key,
+)
 
 DAY = 24 * 60 * 60
 
@@ -31,6 +40,10 @@ COMPLETED_PCT = 70  # achievements unlocked at or above this: likely finished
 ABANDONED_PCT = 30  # dormant and below this: likely abandoned
 RECENT_DAYS = 60  # window for "recent trends"
 TAGS_PER_GAME = 10  # only a game's strongest tags count toward your profile
+PRIVATE_STOP_AFTER = 5  # this many "profile is not public" answers in a row: stop asking
+
+# Tag sets below are matched by tag_key(), so spelling variants like
+# "Rogue-like" / "Roguelike" or "Single-player" / "Singleplayer" all match.
 
 # Tags that describe how a game is sold or received, not what it's like to play.
 NON_DESCRIPTIVE_TAGS = {
@@ -60,6 +73,11 @@ LONG_SESSION_TAGS = {
     "Open World Survival Craft", "Looter Shooter", "Story Rich", "Base Building",
     "Life Sim", "God Game", "Crafting",
 }
+
+_NON_DESCRIPTIVE = {tag_key(t) for t in NON_DESCRIPTIVE_TAGS}
+_SOFTWARE = {tag_key(t) for t in SOFTWARE_TAGS}
+_SHORT = {tag_key(t) for t in SHORT_SESSION_TAGS}
+_LONG = {tag_key(t) for t in LONG_SESSION_TAGS}
 
 
 @dataclass
@@ -148,17 +166,40 @@ def gather(
         notes.append(f"{fallback} games had no SteamSpy tags, so their store genres were used (or nothing).")
 
     achievements: dict[int, AchievementProgress | None] = {}
-    failed = 0
+    failed: dict[str, int] = defaultdict(int)
+    private = private_streak = 0
     for i, g in enumerate(played, 1):
         if progress:
             progress("achievements", i, len(played))
+        if private_streak >= PRIVATE_STOP_AFTER:
+            # Steam keeps saying no; asking for every remaining game only wastes time.
+            achievements[g.appid] = None
+            private += 1
+            continue
         try:
             achievements[g.appid] = client.get_achievements(g.appid)
-        except SteamAPIError:
+            private_streak = 0
+        except ProfilePrivateError:
             achievements[g.appid] = None
-            failed += 1
+            private += 1
+            private_streak += 1
+        except SteamAPIError as e:
+            achievements[g.appid] = None
+            failed[str(e)] += 1
+            private_streak = 0
+    if private:
+        notes.append(
+            f"Steam wouldn't share achievements for {private} games because your Game details "
+            "aren't public. Your library still loads because your API key belongs to your own "
+            "account, but achievements don't get that exception. To fix it, open "
+            "https://steamcommunity.com/my/edit/settings and set 'Game details' to Public."
+        )
     if failed:
-        notes.append(f"Couldn't read achievements for {failed} games.")
+        reason, count = max(failed.items(), key=lambda kv: kv[1])
+        notes.append(
+            f"Couldn't read achievements for {sum(failed.values())} games. "
+            f"Most common error ({count}x): {reason}"
+        )
 
     return LibraryData(games=games, tags=tags, achievements=achievements, now=now or time.time(), notes=notes)
 
@@ -171,16 +212,16 @@ def _game_tags(info: TagInfo | None) -> dict[str, float]:
     """A game's top tags with strength 0-1 (its strongest tag = 1)."""
     if not info or not info.tags:
         return {}
-    top = sorted(info.tags.items(), key=lambda kv: -kv[1])[:TAGS_PER_GAME]
+    top = list(normalize_tags(info.tags).items())[:TAGS_PER_GAME]
     best = max(v for _, v in top) or 1
-    return {t: v / best for t, v in top if t not in NON_DESCRIPTIVE_TAGS}
+    return {t: v / best for t, v in top if tag_key(t) not in _NON_DESCRIPTIVE}
 
 
 def _is_software(info: TagInfo | None) -> bool:
     if not info or not info.tags:
         return False
-    top5 = sorted(info.tags.items(), key=lambda kv: -kv[1])[:5]
-    return any(t in SOFTWARE_TAGS for t, _ in top5)
+    top5 = list(normalize_tags(info.tags))[:5]
+    return any(tag_key(t) in _SOFTWARE for t in top5)
 
 
 def _weight(game: OwnedGame) -> float:
@@ -193,34 +234,37 @@ def _days_ago(ts: int | None, now: float) -> int | None:
 
 
 def _score_tags(games: list[OwnedGame], tags: dict[int, TagInfo]) -> dict[str, TagScore]:
+    """Tag scores keyed by tag_key(), so spellings that differ between games merge."""
     scores: dict[str, float] = defaultdict(float)
     hours: dict[str, float] = defaultdict(float)
     counts: dict[str, int] = defaultdict(int)
     contributions: dict[str, list[tuple[float, str]]] = defaultdict(list)
+    spellings: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for g in games:
         w = _weight(g)
         for tag, strength in _game_tags(tags.get(g.appid)).items():
-            scores[tag] += w * strength
-            hours[tag] += g.hours
-            counts[tag] += 1
-            contributions[tag].append((w * strength, g.name))
+            key = tag_key(tag)
+            scores[key] += w * strength
+            hours[key] += g.hours
+            counts[key] += 1
+            contributions[key].append((w * strength, g.name))
+            spellings[key][tag] += w * strength
     return {
-        tag: TagScore(
-            tag=tag,
-            score=round(scores[tag], 2),
-            hours=round(hours[tag], 1),
-            games=counts[tag],
-            top_games=[name for _, name in sorted(contributions[tag], reverse=True)[:3]],
+        key: TagScore(
+            tag=max(spellings[key].items(), key=lambda kv: kv[1])[0],  # the dominant spelling
+            score=round(scores[key], 2),
+            hours=round(hours[key], 1),
+            games=counts[key],
+            top_games=[name for _, name in sorted(contributions[key], reverse=True)[:3]],
         )
-        for tag in scores
+        for key in scores
     }
 
 
-def _shares(games: list[OwnedGame], tags: dict[int, TagInfo]) -> dict[str, float]:
-    """Each tag's share of total tag score, 0-1."""
-    scored = _score_tags(games, tags)
+def _shares(scored: dict[str, TagScore]) -> dict[str, float]:
+    """Each tag's share of total tag score, 0-1, keyed like _score_tags."""
     total = sum(s.score for s in scored.values()) or 1
-    return {t: s.score / total for t, s in scored.items()}
+    return {k: s.score / total for k, s in scored.items()}
 
 
 def build_profile(data: LibraryData) -> TasteProfile:
@@ -254,13 +298,11 @@ def build_profile(data: LibraryData) -> TasteProfile:
     engaged = [g for g in played if g.appid not in bounced_ids]
 
     # Top tags come from games you actually stuck with.
-    tag_scores = sorted(_score_tags(engaged, data.tags).values(), key=lambda s: -s.score)
+    engaged_scores = _score_tags(engaged, data.tags)
+    tag_scores = sorted(engaged_scores.values(), key=lambda s: -s.score)
 
-    bounced_tag_counts: dict[str, int] = defaultdict(int)
-    for g in bounced:
-        for t in _game_tags(data.tags.get(g.appid)):
-            bounced_tag_counts[t] += 1
-    bounced_tags = [t for t, c in sorted(bounced_tag_counts.items(), key=lambda kv: -kv[1]) if c >= 2][:8]
+    bounced_scores = _score_tags(bounced, data.tags)
+    bounced_tags = [s.tag for s in sorted(bounced_scores.values(), key=lambda s: -s.games) if s.games >= 2][:8]
 
     # Status of each game you stuck with.
     active, completed, abandoned = [], [], []
@@ -287,9 +329,10 @@ def build_profile(data: LibraryData) -> TasteProfile:
     ]
     rising: list[str] = []
     if recent:
-        overall, recent_share = _shares(engaged, data.tags), _shares(recent, data.tags)
-        deltas = {t: s - overall.get(t, 0) for t, s in recent_share.items() if s >= 0.02}
-        rising = [t for t, d in sorted(deltas.items(), key=lambda kv: -kv[1]) if d > 0.005][:5]
+        recent_scores = _score_tags(recent, data.tags)
+        overall, recent_share = _shares(engaged_scores), _shares(recent_scores)
+        deltas = {k: s - overall.get(k, 0) for k, s in recent_share.items() if s >= 0.02}
+        rising = [recent_scores[k].tag for k, d in sorted(deltas.items(), key=lambda kv: -kv[1]) if d > 0.005][:5]
 
     session = _session_lean(engaged, data.tags)
 
@@ -322,10 +365,10 @@ def _session_lean(games: list[OwnedGame], tags: dict[int, TagInfo]) -> dict[str,
     for g in games:
         w = _weight(g)
         total += w
-        gt = set(_game_tags(tags.get(g.appid)))
-        if gt & SHORT_SESSION_TAGS:
+        gt = {tag_key(t) for t in _game_tags(tags.get(g.appid))}
+        if gt & _SHORT:
             short += w
-        if gt & LONG_SESSION_TAGS:
+        if gt & _LONG:
             long_ += w
     if not total:
         return {"lean": "unknown", "short_pct": 0, "long_pct": 0, "note": "Not enough play data."}
